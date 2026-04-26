@@ -1,0 +1,15 @@
+<Project>
+  <Import Project="Directory.Build.local.props" Condition="Exists('Directory.Build.local.props')" />
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+    <Zwcad2025InstallDir Condition="'$(Zwcad2025InstallDir)' == '' and '$(ZWCAD2025_DIR)' != ''">$(ZWCAD2025_DIR)</Zwcad2025InstallDir>
+    <Zwcad2025InstallDir Condition="'$(Zwcad2025InstallDir)' == '' and '$(ProgramW6432)' != ''">$(ProgramW6432)\ZWSOFT\ZWCAD 2025</Zwcad2025InstallDir>
+    <Zwcad2025InstallDir Condition="'$(Zwcad2025InstallDir)' == ''">$(ProgramFiles)\ZWSOFT\ZWCAD 2025</Zwcad2025InstallDir>
+    <ZwcadManagedReferenceDir Condition="'$(ZwcadManagedReferenceDir)' == ''">$(Zwcad2025InstallDir)</ZwcadManagedReferenceDir>
+  </PropertyGroup>
+</Project>

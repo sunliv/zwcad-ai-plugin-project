@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>ZwcadAi.AiService</AssemblyName>
+    <RootNamespace>ZwcadAi.AiService</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZwcadAi.Core\ZwcadAi.Core.csproj" />
+  </ItemGroup>
+</Project>

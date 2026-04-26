@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>ZwcadAi.Core</AssemblyName>
+    <RootNamespace>ZwcadAi.Core</RootNamespace>
+  </PropertyGroup>
+</Project>

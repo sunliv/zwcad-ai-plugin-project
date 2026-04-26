@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>ZwcadAiPlugin</AssemblyName>
+    <RootNamespace>ZwcadAi.Plugin</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="ZwManaged">
+      <HintPath>$(ZwcadManagedReferenceDir)\ZwManaged.dll</HintPath>
+      <Private>false</Private>
+      <SpecificVersion>false</SpecificVersion>
+    </Reference>
+    <Reference Include="ZwDatabaseMgd">
+      <HintPath>$(ZwcadManagedReferenceDir)\ZwDatabaseMgd.dll</HintPath>
+      <Private>false</Private>
+      <SpecificVersion>false</SpecificVersion>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZwcadAi.Core\ZwcadAi.Core.csproj" />
+    <ProjectReference Include="..\ZwcadAi.Renderer\ZwcadAi.Renderer.csproj" />
+    <ProjectReference Include="..\ZwcadAi.AiService\ZwcadAi.AiService.csproj" />
+  </ItemGroup>
+</Project>
