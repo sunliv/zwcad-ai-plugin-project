@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.local/zwcad-ai/drawing-spec-v1.schema.json",
   "title": "DrawingSpec v1",
+  "description": "DrawingSpec v1 public wire contract. All 2D points use array form [x, y]; object-shaped points are invalid on the wire.",
   "type": "object",
   "additionalProperties": false,
   "required": ["drawingSpecVersion", "units", "layers", "entities"],
@@ -45,6 +46,7 @@
   },
   "$defs": {
     "point2d": {
+      "description": "2D model-space point encoded as [x, y]. Coordinates are numeric values in DrawingSpec units.",
       "type": "array",
       "prefixItems": [
         { "type": "number" },
@@ -68,7 +70,7 @@
       "type": "object",
       "required": ["id", "type", "layer"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
         "type": { "type": "string" },
         "layer": { "type": "string", "minLength": 1 }
       }
@@ -91,7 +93,7 @@
           "additionalProperties": false,
           "required": ["id", "type", "layer", "start", "end"],
           "properties": {
-            "id": { "type": "string" },
+            "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
             "type": { "const": "line" },
             "layer": { "type": "string" },
             "start": { "$ref": "#/$defs/point2d" },
@@ -108,7 +110,7 @@
           "additionalProperties": false,
           "required": ["id", "type", "layer", "points"],
           "properties": {
-            "id": { "type": "string" },
+            "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
             "type": { "const": "polyline" },
             "layer": { "type": "string" },
             "closed": { "type": "boolean" },
@@ -129,7 +131,7 @@
           "additionalProperties": false,
           "required": ["id", "type", "layer", "center", "radius"],
           "properties": {
-            "id": { "type": "string" },
+            "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
             "type": { "const": "circle" },
             "layer": { "type": "string" },
             "center": { "$ref": "#/$defs/point2d" },
@@ -146,7 +148,7 @@
           "additionalProperties": false,
           "required": ["id", "type", "layer", "center", "radius", "startAngle", "endAngle"],
           "properties": {
-            "id": { "type": "string" },
+            "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
             "type": { "const": "arc" },
             "layer": { "type": "string" },
             "center": { "$ref": "#/$defs/point2d" },
@@ -165,7 +167,7 @@
           "additionalProperties": false,
           "required": ["id", "type", "layer", "position", "value", "height"],
           "properties": {
-            "id": { "type": "string" },
+            "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
             "type": { "enum": ["text", "mtext"] },
             "layer": { "type": "string" },
             "position": { "$ref": "#/$defs/point2d" },
@@ -184,7 +186,7 @@
           "additionalProperties": false,
           "required": ["id", "type", "layer", "center", "size"],
           "properties": {
-            "id": { "type": "string" },
+            "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
             "type": { "const": "centerMark" },
             "layer": { "type": "string" },
             "center": { "$ref": "#/$defs/point2d" },
@@ -194,24 +196,80 @@
       ]
     },
     "dimension": {
+      "oneOf": [
+        { "$ref": "#/$defs/linearDimension" },
+        { "$ref": "#/$defs/alignedDimension" },
+        { "$ref": "#/$defs/radiusDimension" },
+        { "$ref": "#/$defs/diameterDimension" },
+        { "$ref": "#/$defs/angularDimension" }
+      ]
+    },
+    "linearDimension": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "type", "layer"],
+      "required": ["id", "type", "layer", "from", "to", "offset"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "type": {
-          "type": "string",
-          "enum": ["linear", "aligned", "radius", "diameter", "angular"]
-        },
+        "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
+        "type": { "const": "linear" },
         "layer": { "type": "string", "minLength": 1 },
         "from": { "$ref": "#/$defs/point2d" },
         "to": { "$ref": "#/$defs/point2d" },
+        "offset": { "$ref": "#/$defs/point2d" },
+        "text": { "type": "string" }
+      }
+    },
+    "alignedDimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "layer", "from", "to", "offset"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
+        "type": { "const": "aligned" },
+        "layer": { "type": "string", "minLength": 1 },
+        "from": { "$ref": "#/$defs/point2d" },
+        "to": { "$ref": "#/$defs/point2d" },
+        "offset": { "$ref": "#/$defs/point2d" },
+        "text": { "type": "string" }
+      }
+    },
+    "radiusDimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "layer", "targetEntityId"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
+        "type": { "const": "radius" },
+        "layer": { "type": "string", "minLength": 1 },
+        "targetEntityId": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
+        "text": { "type": "string" }
+      }
+    },
+    "diameterDimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "layer", "targetEntityId"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
+        "type": { "const": "diameter" },
+        "layer": { "type": "string", "minLength": 1 },
+        "targetEntityId": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
+        "text": { "type": "string" }
+      }
+    },
+    "angularDimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "layer", "center", "from", "to", "offset"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$" },
+        "type": { "const": "angular" },
+        "layer": { "type": "string", "minLength": 1 },
         "center": { "$ref": "#/$defs/point2d" },
-        "targetEntityId": { "type": "string" },
+        "from": { "$ref": "#/$defs/point2d" },
+        "to": { "$ref": "#/$defs/point2d" },
         "offset": { "$ref": "#/$defs/point2d" },
         "text": { "type": "string" }
       }
     }
   }
 }
-

@@ -109,10 +109,6 @@ public enum PlannedEntityKind
 
 public sealed class DrawingSpecPlanRenderer : IRenderer
 {
-    private static readonly HashSet<string> AllowedLayers = new HashSet<string>(
-        new[] { CadLayerNames.Outline, CadLayerNames.Center, CadLayerNames.Dimension },
-        StringComparer.Ordinal);
-
     public DrawingRenderPlan CreatePlan(DrawingSpec spec)
     {
         if (spec == null)
@@ -232,126 +228,6 @@ public sealed class DrawingSpecPlanRenderer : IRenderer
 
     private static List<ValidationIssue> Validate(DrawingSpec spec)
     {
-        var issues = new List<ValidationIssue>();
-        var layerNames = new HashSet<string>(spec.Layers.Select(layer => layer.Name), StringComparer.Ordinal);
-
-        foreach (var layer in spec.Layers)
-        {
-            if (!AllowedLayers.Contains(layer.Name))
-            {
-                issues.Add(new ValidationIssue(
-                    "unsupported_layer",
-                    $"layers[{layer.Name}]",
-                    $"Layer '{layer.Name}' is outside the P1-03 standard whitelist.",
-                    ValidationSeverity.Error));
-            }
-        }
-
-        foreach (var entity in spec.Entities)
-        {
-            if (!layerNames.Contains(entity.Layer))
-            {
-                issues.Add(new ValidationIssue(
-                    "missing_entity_layer",
-                    $"entities[{entity.Id}].layer",
-                    $"Entity '{entity.Id}' references missing layer '{entity.Layer}'.",
-                    ValidationSeverity.Error));
-            }
-
-            ValidateEntityGeometry(entity, issues);
-        }
-
-        var entityIds = new HashSet<string>(spec.Entities.Select(entity => entity.Id), StringComparer.Ordinal);
-        foreach (var dimension in spec.Dimensions)
-        {
-            if (!layerNames.Contains(dimension.Layer))
-            {
-                issues.Add(new ValidationIssue(
-                    "missing_dimension_layer",
-                    $"dimensions[{dimension.Id}].layer",
-                    $"Dimension '{dimension.Id}' references missing layer '{dimension.Layer}'.",
-                    ValidationSeverity.Error));
-            }
-
-            if (!string.Equals(dimension.Layer, CadLayerNames.Dimension, StringComparison.Ordinal))
-            {
-                issues.Add(new ValidationIssue(
-                    "invalid_dimension_layer",
-                    $"dimensions[{dimension.Id}].layer",
-                    $"Dimension '{dimension.Id}' must be on layer '{CadLayerNames.Dimension}'.",
-                    ValidationSeverity.Error));
-            }
-
-            if (!string.IsNullOrWhiteSpace(dimension.TargetEntityId) && !entityIds.Contains(dimension.TargetEntityId))
-            {
-                issues.Add(new ValidationIssue(
-                    "missing_dimension_target",
-                    $"dimensions[{dimension.Id}].targetEntityId",
-                    $"Dimension '{dimension.Id}' targets missing entity '{dimension.TargetEntityId}'.",
-                    ValidationSeverity.Error));
-            }
-        }
-
-        return issues;
-    }
-
-    private static void ValidateEntityGeometry(EntitySpec entity, ICollection<ValidationIssue> issues)
-    {
-        switch (entity.Type)
-        {
-            case EntityTypes.Polyline:
-                if (entity.Points.Count < 2)
-                {
-                    issues.Add(new ValidationIssue(
-                        "invalid_polyline_points",
-                        $"entities[{entity.Id}].points",
-                        $"Polyline '{entity.Id}' must contain at least two points.",
-                        ValidationSeverity.Error));
-                }
-
-                break;
-            case EntityTypes.Circle:
-                if (entity.Center == null || entity.Radius <= 0)
-                {
-                    issues.Add(new ValidationIssue(
-                        "invalid_circle_geometry",
-                        $"entities[{entity.Id}]",
-                        $"Circle '{entity.Id}' must have center and positive radius.",
-                        ValidationSeverity.Error));
-                }
-
-                break;
-            case EntityTypes.CenterMark:
-                if (entity.Center == null || entity.Size <= 0)
-                {
-                    issues.Add(new ValidationIssue(
-                        "invalid_center_mark_geometry",
-                        $"entities[{entity.Id}]",
-                        $"Center mark '{entity.Id}' must have center and positive size.",
-                        ValidationSeverity.Error));
-                }
-
-                if (!string.Equals(entity.Layer, CadLayerNames.Center, StringComparison.Ordinal))
-                {
-                    issues.Add(new ValidationIssue(
-                        "invalid_center_mark_layer",
-                        $"entities[{entity.Id}].layer",
-                        $"Center mark '{entity.Id}' must be on layer '{CadLayerNames.Center}'.",
-                        ValidationSeverity.Error));
-                }
-
-                break;
-            case EntityTypes.Line:
-                if (entity.Start == null || entity.End == null)
-                {
-                    issues.Add(new ValidationIssue(
-                        "invalid_line_geometry",
-                        $"entities[{entity.Id}]",
-                        $"Line '{entity.Id}' must have start and end points.",
-                        ValidationSeverity.Error));
-                }
-
-                break;
-        }
+        return DrawingSpecValidator.ValidateBusinessRules(spec).Issues.ToList();
     }
 }

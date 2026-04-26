@@ -10,6 +10,8 @@
 - 所有单位、坐标、半径、角度、图层和标注必须显式。
 - 所有实体必须有稳定 `id`。
 - 只能使用允许的实体类型。
+- 所有二维点必须使用数组线格式 `[x, y]`，禁止输出 `{ "x": ..., "y": ... }` 或 `{ "X": ..., "Y": ... }`。
+- 标注必须放在顶层 `dimensions` 数组里，禁止把 `dimension` 当作 `entities[].type`。
 - 如果需求缺少关键尺寸、位置、单位或约束，在 `clarifications` 中提出问题，并保持 `entities` 为空或只输出安全的部分。
 - 输出必须符合 DrawingSpec v1 Schema。
 
@@ -17,8 +19,15 @@
 
 - 默认单位：`mm`，除非用户明确指定其他单位。
 - 坐标系：二维 XY 平面。
-- 角度单位：度。
+- 坐标原点：默认位于生成零件外包络左下角，除非上下文明确给出其他原点。
+- 角度单位：度；0 度沿 +X，正角度为逆时针。
 - 圆的尺寸输入若写“直径”，需要转换为半径。
+- 默认图层标准：`enterprise-default-v1`；图层名大小写敏感。
+- 允许的实体类型：`line`、`polyline`、`circle`、`arc`、`text`、`mtext`、`centerMark`。
+- 允许的标注类型：`linear`、`aligned`、`radius`、`diameter`、`angular`。
+- 常用图层：`OUTLINE`、`CENTER`、`DIM`、`TEXT`、`HIDDEN`、`CONSTRUCTION`、`TITLE`。
+- 生产规格至少声明 `OUTLINE`、`CENTER`、`DIM`。
+- `centerMark` 必须使用 `CENTER` 图层；所有标注必须使用 `DIM` 图层；普通文字使用 `TEXT` 图层。
 - 不允许创建或删除外部文件。
 
 ## Output Shape
@@ -40,6 +49,18 @@
 }
 ```
 
+点格式示例：
+
+```json
+{
+  "id": "hole-1",
+  "type": "circle",
+  "layer": "OUTLINE",
+  "center": [30, 30],
+  "radius": 6
+}
+```
+
 ## Missing Information Policy
 
 必须追问的情况：
@@ -49,4 +70,3 @@
 - “左边”“中间”“靠近”等描述无法唯一确定位置。
 - 用户要求修改已有图形，但未提供选择集或实体 id。
 - 图纸比例、图框或企业标准被要求使用但上下文未提供。
-

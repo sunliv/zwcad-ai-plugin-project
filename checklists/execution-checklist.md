@@ -20,11 +20,11 @@
 
 ## P2 DrawingSpec Protocol
 
-- [ ] 完成 DrawingSpec v1 Schema。
-- [ ] 完成协议说明文档。
-- [ ] 完成 5 个以上样例。
-- [ ] 实现 Schema 校验。
-- [ ] 实现业务规则校验。
+- [x] 完成 DrawingSpec v1 Schema。
+- [x] 完成协议说明文档。
+- [x] 完成 5 个以上样例。
+- [x] 实现 Schema 校验。
+- [x] 实现业务规则校验。
 
 ## P3 Renderer
 

@@ -1,0 +1,95 @@
+{
+  "drawingSpecVersion": "1.0",
+  "units": "mm",
+  "metadata": {
+    "title": "120x80 rectangular plate with four mounting holes",
+    "domain": "mechanical_plate",
+    "createdBy": "p2-protocol-sample",
+    "requestId": "sample-rectangular-plate-multi-hole-001"
+  },
+  "layers": [
+    {
+      "name": "OUTLINE",
+      "color": 7,
+      "lineType": "Continuous",
+      "lineWeight": 0.35
+    },
+    {
+      "name": "CENTER",
+      "color": 1,
+      "lineType": "Center",
+      "lineWeight": 0.18
+    },
+    {
+      "name": "DIM",
+      "color": 3,
+      "lineType": "Continuous",
+      "lineWeight": 0.18
+    }
+  ],
+  "entities": [
+    {
+      "id": "outer-profile",
+      "type": "polyline",
+      "layer": "OUTLINE",
+      "closed": true,
+      "points": [[0, 0], [120, 0], [120, 80], [0, 80]]
+    },
+    {
+      "id": "hole-a",
+      "type": "circle",
+      "layer": "OUTLINE",
+      "center": [20, 20],
+      "radius": 4
+    },
+    {
+      "id": "hole-b",
+      "type": "circle",
+      "layer": "OUTLINE",
+      "center": [100, 20],
+      "radius": 4
+    },
+    {
+      "id": "hole-c",
+      "type": "circle",
+      "layer": "OUTLINE",
+      "center": [100, 60],
+      "radius": 4
+    },
+    {
+      "id": "hole-d",
+      "type": "circle",
+      "layer": "OUTLINE",
+      "center": [20, 60],
+      "radius": 4
+    }
+  ],
+  "dimensions": [
+    {
+      "id": "dim-width",
+      "type": "linear",
+      "layer": "DIM",
+      "from": [0, 0],
+      "to": [120, 0],
+      "offset": [0, -12],
+      "text": "120"
+    },
+    {
+      "id": "dim-height",
+      "type": "linear",
+      "layer": "DIM",
+      "from": [120, 0],
+      "to": [120, 80],
+      "offset": [12, 0],
+      "text": "80"
+    },
+    {
+      "id": "dim-hole-dia",
+      "type": "diameter",
+      "layer": "DIM",
+      "targetEntityId": "hole-a",
+      "text": "4X %%c8"
+    }
+  ],
+  "clarifications": []
+}

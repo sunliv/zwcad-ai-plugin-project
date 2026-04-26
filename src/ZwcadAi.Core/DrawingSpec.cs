@@ -26,6 +26,8 @@ public sealed class DrawingMetadata
 
     public string Domain { get; set; } = DrawingDomain.MechanicalPlate;
 
+    public string Author { get; set; } = string.Empty;
+
     public string CreatedBy { get; set; } = string.Empty;
 
     public string RequestId { get; set; } = string.Empty;
@@ -60,9 +62,21 @@ public sealed class EntitySpec
 
     public DrawingPoint? Center { get; set; }
 
+    public DrawingPoint? Position { get; set; }
+
     public double Radius { get; set; }
 
     public double Size { get; set; }
+
+    public double StartAngle { get; set; }
+
+    public double EndAngle { get; set; }
+
+    public string Value { get; set; } = string.Empty;
+
+    public double Height { get; set; }
+
+    public double Rotation { get; set; }
 }
 
 public sealed class DimensionSpec
@@ -101,6 +115,15 @@ public sealed class DrawingPoint
     public double X { get; set; }
 
     public double Y { get; set; }
+}
+
+public static class DrawingSpecWireFormat
+{
+    public const string Version = "1.0";
+
+    // Public DrawingSpec JSON uses point2d arrays: [x, y].
+    // DrawingPoint is the internal object model used by Core and renderer code.
+    public const string Point2d = "[x, y]";
 }
 
 public static class EntityTypes

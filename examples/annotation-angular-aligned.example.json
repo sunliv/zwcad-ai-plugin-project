@@ -1,0 +1,83 @@
+{
+  "drawingSpecVersion": "1.0",
+  "units": "mm",
+  "metadata": {
+    "title": "Annotation, aligned dimension, and angular dimension sample",
+    "domain": "mechanical_plate",
+    "createdBy": "p2-protocol-sample",
+    "requestId": "sample-annotation-angular-aligned-001"
+  },
+  "layers": [
+    {
+      "name": "OUTLINE",
+      "color": 7,
+      "lineType": "Continuous",
+      "lineWeight": 0.35
+    },
+    {
+      "name": "CENTER",
+      "color": 1,
+      "lineType": "Center",
+      "lineWeight": 0.18
+    },
+    {
+      "name": "DIM",
+      "color": 3,
+      "lineType": "Continuous",
+      "lineWeight": 0.18
+    },
+    {
+      "name": "TEXT",
+      "color": 2,
+      "lineType": "Continuous",
+      "lineWeight": 0.18
+    }
+  ],
+  "entities": [
+    {
+      "id": "angled-edge-a",
+      "type": "line",
+      "layer": "OUTLINE",
+      "start": [0, 0],
+      "end": [40, 30]
+    },
+    {
+      "id": "angled-edge-b",
+      "type": "line",
+      "layer": "OUTLINE",
+      "start": [0, 0],
+      "end": [50, 0]
+    },
+    {
+      "id": "note-multi",
+      "type": "mtext",
+      "layer": "TEXT",
+      "position": [0, 42],
+      "value": "CHECK ANGLED EDGE\\nDEBURR ALL EDGES",
+      "height": 3.5,
+      "rotation": 0
+    }
+  ],
+  "dimensions": [
+    {
+      "id": "dim-angled-edge",
+      "type": "aligned",
+      "layer": "DIM",
+      "from": [0, 0],
+      "to": [40, 30],
+      "offset": [8, 8],
+      "text": "50"
+    },
+    {
+      "id": "dim-angle-between-edges",
+      "type": "angular",
+      "layer": "DIM",
+      "center": [0, 0],
+      "from": [50, 0],
+      "to": [40, 30],
+      "offset": [18, 14],
+      "text": "36.9%%d"
+    }
+  ],
+  "clarifications": []
+}

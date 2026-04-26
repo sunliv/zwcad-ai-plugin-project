@@ -1,0 +1,116 @@
+{
+  "drawingSpecVersion": "1.0",
+  "units": "mm",
+  "metadata": {
+    "title": "150x70 plate with three-hole array, centerlines, and diameter dimensions",
+    "domain": "mechanical_plate",
+    "createdBy": "p2-protocol-sample",
+    "requestId": "sample-hole-array-centerlines-001"
+  },
+  "layers": [
+    {
+      "name": "OUTLINE",
+      "color": 7,
+      "lineType": "Continuous",
+      "lineWeight": 0.35
+    },
+    {
+      "name": "CENTER",
+      "color": 1,
+      "lineType": "Center",
+      "lineWeight": 0.18
+    },
+    {
+      "name": "DIM",
+      "color": 3,
+      "lineType": "Continuous",
+      "lineWeight": 0.18
+    }
+  ],
+  "entities": [
+    {
+      "id": "outer-profile",
+      "type": "polyline",
+      "layer": "OUTLINE",
+      "closed": true,
+      "points": [[0, 0], [150, 0], [150, 70], [0, 70]]
+    },
+    {
+      "id": "hole-1",
+      "type": "circle",
+      "layer": "OUTLINE",
+      "center": [35, 35],
+      "radius": 6
+    },
+    {
+      "id": "hole-2",
+      "type": "circle",
+      "layer": "OUTLINE",
+      "center": [75, 35],
+      "radius": 6
+    },
+    {
+      "id": "hole-3",
+      "type": "circle",
+      "layer": "OUTLINE",
+      "center": [115, 35],
+      "radius": 6
+    },
+    {
+      "id": "hole-1-center",
+      "type": "centerMark",
+      "layer": "CENTER",
+      "center": [35, 35],
+      "size": 11
+    },
+    {
+      "id": "hole-2-center",
+      "type": "centerMark",
+      "layer": "CENTER",
+      "center": [75, 35],
+      "size": 11
+    },
+    {
+      "id": "hole-3-center",
+      "type": "centerMark",
+      "layer": "CENTER",
+      "center": [115, 35],
+      "size": 11
+    },
+    {
+      "id": "array-centerline",
+      "type": "line",
+      "layer": "CENTER",
+      "start": [20, 35],
+      "end": [130, 35]
+    }
+  ],
+  "dimensions": [
+    {
+      "id": "dim-array-pitch-1",
+      "type": "linear",
+      "layer": "DIM",
+      "from": [35, 35],
+      "to": [75, 35],
+      "offset": [0, -18],
+      "text": "40"
+    },
+    {
+      "id": "dim-array-pitch-2",
+      "type": "linear",
+      "layer": "DIM",
+      "from": [75, 35],
+      "to": [115, 35],
+      "offset": [0, -18],
+      "text": "40"
+    },
+    {
+      "id": "dim-hole-dia",
+      "type": "diameter",
+      "layer": "DIM",
+      "targetEntityId": "hole-1",
+      "text": "3X %%c12"
+    }
+  ],
+  "clarifications": []
+}

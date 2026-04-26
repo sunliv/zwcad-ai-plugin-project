@@ -83,7 +83,8 @@ AI 服务输入：
   "context": {
     "units": "mm",
     "domain": "mechanical_plate",
-    "allowedEntityTypes": ["line", "polyline", "circle", "arc", "text", "dimension"],
+    "allowedEntityTypes": ["line", "polyline", "circle", "arc", "text", "mtext", "centerMark"],
+    "allowedDimensionTypes": ["linear", "aligned", "radius", "diameter", "angular"],
     "layerStandard": "enterprise-default-v1",
     "drawingSpecVersion": "1.0"
   }

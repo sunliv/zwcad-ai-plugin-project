@@ -1,0 +1,59 @@
+{
+  "drawingSpecVersion": "1.0",
+  "units": "mm",
+  "metadata": {
+    "title": "Invalid sample with missing layer, unsupported type, huge coordinate, and missing key geometry",
+    "domain": "mechanical_plate",
+    "createdBy": "p2-protocol-sample",
+    "requestId": "sample-invalid-mixed-protocol-errors-001"
+  },
+  "layers": [
+    {
+      "name": "OUTLINE",
+      "color": 7,
+      "lineType": "Continuous",
+      "lineWeight": 0.35
+    },
+    {
+      "name": "CENTER",
+      "color": 1,
+      "lineType": "Center",
+      "lineWeight": 0.18
+    },
+    {
+      "name": "DIM",
+      "color": 3,
+      "lineType": "Continuous",
+      "lineWeight": 0.18
+    }
+  ],
+  "entities": [
+    {
+      "id": "missing-layer-line",
+      "type": "line",
+      "start": [0, 0],
+      "end": [25, 0]
+    },
+    {
+      "id": "unsupported-spline",
+      "type": "spline",
+      "layer": "OUTLINE",
+      "points": [[0, 0], [10, 10], [20, 0]]
+    },
+    {
+      "id": "oversized-coordinate-line",
+      "type": "line",
+      "layer": "OUTLINE",
+      "start": [0, 0],
+      "end": [100001, 0]
+    },
+    {
+      "id": "missing-radius-circle",
+      "type": "circle",
+      "layer": "OUTLINE",
+      "center": [15, 15]
+    }
+  ],
+  "dimensions": [],
+  "clarifications": []
+}

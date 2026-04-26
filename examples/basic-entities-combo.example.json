@@ -1,0 +1,96 @@
+{
+  "drawingSpecVersion": "1.0",
+  "units": "mm",
+  "metadata": {
+    "title": "Basic entity combination sample",
+    "domain": "mechanical_plate",
+    "createdBy": "p2-protocol-sample",
+    "requestId": "sample-basic-entities-combo-001"
+  },
+  "layers": [
+    {
+      "name": "OUTLINE",
+      "color": 7,
+      "lineType": "Continuous",
+      "lineWeight": 0.35
+    },
+    {
+      "name": "CENTER",
+      "color": 1,
+      "lineType": "Center",
+      "lineWeight": 0.18
+    },
+    {
+      "name": "DIM",
+      "color": 3,
+      "lineType": "Continuous",
+      "lineWeight": 0.18
+    },
+    {
+      "name": "TEXT",
+      "color": 2,
+      "lineType": "Continuous",
+      "lineWeight": 0.18
+    }
+  ],
+  "entities": [
+    {
+      "id": "baseline",
+      "type": "line",
+      "layer": "OUTLINE",
+      "start": [0, 0],
+      "end": [90, 0]
+    },
+    {
+      "id": "open-profile",
+      "type": "polyline",
+      "layer": "OUTLINE",
+      "closed": false,
+      "points": [[0, 0], [20, 25], [55, 25], [90, 0]]
+    },
+    {
+      "id": "reference-circle",
+      "type": "circle",
+      "layer": "OUTLINE",
+      "center": [45, 12],
+      "radius": 8
+    },
+    {
+      "id": "relief-arc",
+      "type": "arc",
+      "layer": "OUTLINE",
+      "center": [45, 25],
+      "radius": 14,
+      "startAngle": 180,
+      "endAngle": 360
+    },
+    {
+      "id": "note-1",
+      "type": "text",
+      "layer": "TEXT",
+      "position": [0, 38],
+      "value": "BASIC ENTITY SAMPLE",
+      "height": 3.5,
+      "rotation": 0
+    }
+  ],
+  "dimensions": [
+    {
+      "id": "dim-baseline",
+      "type": "linear",
+      "layer": "DIM",
+      "from": [0, 0],
+      "to": [90, 0],
+      "offset": [0, -10],
+      "text": "90"
+    },
+    {
+      "id": "dim-circle-radius",
+      "type": "radius",
+      "layer": "DIM",
+      "targetEntityId": "reference-circle",
+      "text": "R8"
+    }
+  ],
+  "clarifications": []
+}
