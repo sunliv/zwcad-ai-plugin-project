@@ -11,12 +11,12 @@
 
 ## P1 Technical POC
 
-- [ ] 创建解决方案骨架。
+- [x] 创建解决方案骨架。
 - [x] 实现最小插件命令。
-- [ ] 绘制固定矩形板件。
-- [ ] 验证事务回滚。
-- [ ] 验证 DWG 保存。
-- [ ] 验证 PDF 导出。
+- [x] 绘制固定矩形板件。
+- [x] 验证事务回滚。
+- [x] 验证 DWG 保存（`AIEXPORT` 已在 ZWCAD 内生成 DWG 副本）。
+- [x] 验证 PDF 导出（`AIEXPORT` 已在 ZWCAD 内生成 PDF）。
 
 ## P2 DrawingSpec Protocol
 

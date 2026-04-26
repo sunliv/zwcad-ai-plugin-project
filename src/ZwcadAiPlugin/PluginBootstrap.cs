@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
+using System.Linq;
 using ZwcadAi.Core;
+using ZwcadAi.Renderer;
 using ZwSoft.ZwCAD.ApplicationServices;
 using ZwSoft.ZwCAD.Runtime;
 
@@ -25,7 +27,7 @@ public sealed class PluginApplication : IExtensionApplication
 {
     public void Initialize()
     {
-        CadLog.WriteInfo("ZWCAD AI plugin loaded. Command AIDRAW is registered.");
+        CadLog.WriteInfo("ZWCAD AI plugin loaded. Commands AIDRAW and AIEXPORT are registered.");
     }
 
     public void Terminate()
@@ -42,13 +44,50 @@ public sealed class PluginCommands
         try
         {
             var status = new PluginBootstrap().GetStatus();
+            var spec = RectangularPlateSample.Create();
+            var renderer = new DrawingSpecPlanRenderer();
+            var plan = renderer.CreatePlan(spec);
+
+            if (!plan.Validation.IsValid)
+            {
+                var errors = string.Join(
+                    "; ",
+                    plan.Validation.Issues.Select(issue => $"{issue.Code} at {issue.Path}: {issue.Message}"));
+                CadLog.WriteInfo($"{status.Command} POC sample validation failed: {errors}");
+                return;
+            }
+
+            var renderedEntities = new ZwcadDrawingWriter().Render(plan);
 
             CadLog.WriteInfo(
-                $"{status.Product}: {status.Command} is ready for {status.Domain}. No DWG changes were made.");
+                $"{status.Product}: {status.Command} rendered fixed {status.Domain} POC sample "
+                + $"'{spec.Metadata.RequestId}' with {renderedEntities.Count} CAD entities.");
         }
         catch (System.Exception exception)
         {
             CadLog.WriteError($"AIDRAW failed: {exception.Message}", exception);
+        }
+    }
+
+    [CommandMethod(PluginCommandCatalog.AiExport)]
+    public void AiExport()
+    {
+        try
+        {
+            var result = new ZwcadExportService().ExportActiveDocument();
+
+            CadLog.WriteInfo($"AIEXPORT DWG copy: {result.DwgPath}");
+            if (result.PdfSucceeded)
+            {
+                CadLog.WriteInfo($"AIEXPORT PDF: {result.PdfPath}");
+                return;
+            }
+
+            CadLog.WriteInfo($"AIEXPORT PDF export unavailable: {result.PdfMessage}");
+        }
+        catch (System.Exception exception)
+        {
+            CadLog.WriteError($"AIEXPORT failed without saving over the active drawing: {exception.Message}", exception);
         }
     }
 }

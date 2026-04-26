@@ -49,6 +49,20 @@ public sealed class EntitySpec
     public string Type { get; set; } = string.Empty;
 
     public string Layer { get; set; } = string.Empty;
+
+    public bool Closed { get; set; }
+
+    public IReadOnlyList<DrawingPoint> Points { get; set; } = Array.Empty<DrawingPoint>();
+
+    public DrawingPoint? Start { get; set; }
+
+    public DrawingPoint? End { get; set; }
+
+    public DrawingPoint? Center { get; set; }
+
+    public double Radius { get; set; }
+
+    public double Size { get; set; }
 }
 
 public sealed class DimensionSpec
@@ -58,4 +72,53 @@ public sealed class DimensionSpec
     public string Type { get; set; } = string.Empty;
 
     public string Layer { get; set; } = string.Empty;
+
+    public DrawingPoint? From { get; set; }
+
+    public DrawingPoint? To { get; set; }
+
+    public DrawingPoint? Center { get; set; }
+
+    public string TargetEntityId { get; set; } = string.Empty;
+
+    public DrawingPoint? Offset { get; set; }
+
+    public string Text { get; set; } = string.Empty;
+}
+
+public sealed class DrawingPoint
+{
+    public DrawingPoint()
+    {
+    }
+
+    public DrawingPoint(double x, double y)
+    {
+        X = x;
+        Y = y;
+    }
+
+    public double X { get; set; }
+
+    public double Y { get; set; }
+}
+
+public static class EntityTypes
+{
+    public const string Line = "line";
+    public const string Polyline = "polyline";
+    public const string Circle = "circle";
+    public const string Arc = "arc";
+    public const string Text = "text";
+    public const string MText = "mtext";
+    public const string CenterMark = "centerMark";
+}
+
+public static class DimensionTypes
+{
+    public const string Linear = "linear";
+    public const string Aligned = "aligned";
+    public const string Radius = "radius";
+    public const string Diameter = "diameter";
+    public const string Angular = "angular";
 }
