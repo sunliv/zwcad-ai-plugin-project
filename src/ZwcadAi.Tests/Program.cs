@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Xml.Linq;
 using ZwcadAi.AiService;
 using ZwcadAi.Core;
@@ -19,6 +20,7 @@ public static class Program
             ("AI request defaults to mechanical plate", AiRequestDefaultsToMechanicalPlate),
             ("Fixed rectangular plate sample matches P1-03 geometry", FixedRectangularPlateSampleMatchesP103Geometry),
             ("DrawingSpec schema accepts valid example files", DrawingSpecSchemaAcceptsValidExampleFiles),
+            ("Basic entities combo example validates and plans P3-01 entities", BasicEntitiesComboExampleValidatesAndPlansP301Entities),
             ("DrawingSpec schema rejects invalid example files", DrawingSpecSchemaRejectsInvalidExampleFiles),
             ("DrawingSpec schema rejects unsupported entity type", DrawingSpecSchemaRejectsUnsupportedEntityType),
             ("DrawingSpec schema rejects missing required fields", DrawingSpecSchemaRejectsMissingRequiredFields),
@@ -30,6 +32,8 @@ public static class Program
             ("DrawingSpec business rules reject entity count over limit", DrawingSpecBusinessRulesRejectEntityCountOverLimit),
             ("DrawingSpec business rules reject incomplete angular dimensions", DrawingSpecBusinessRulesRejectIncompleteAngularDimensions),
             ("Renderer plans P1-03 plate entities on standard layers", RendererPlansP103PlateEntitiesOnStandardLayers),
+            ("Renderer maps every P3-01 basic entity id", RendererMapsEveryP301BasicEntityId),
+            ("Renderer failures locate stable entity ids", RendererFailuresLocateStableEntityIds),
             ("Renderer rejects specs missing production layers", RendererRejectsSpecsMissingProductionLayers),
             ("Renderer result preserves spec-to-CAD mapping", RendererResultPreservesMapping),
             ("Project references follow architecture boundaries", ProjectReferencesFollowArchitectureBoundaries),
@@ -39,7 +43,8 @@ public static class Program
             ("Plugin AIDRAW uses fixed POC sample and transaction writer", PluginAiDrawUsesFixedPocSampleAndTransactionWriter),
             ("Plugin registers AIEXPORT command", PluginRegistersAiExportCommand),
             ("AIEXPORT saves a DWG copy without saving the active drawing", PluginAiExportSavesDwgCopyWithoutSavingActiveDrawing),
-            ("AIEXPORT covers the PDF plot-to-file path", PluginAiExportCoversPdfPlotToFilePath)
+            ("AIEXPORT covers the PDF plot-to-file path", PluginAiExportCoversPdfPlotToFilePath),
+            ("Plugin writer supports P3-01 basic entity dispatch", PluginWriterSupportsP301BasicEntityDispatch)
         };
 
         foreach (var test in tests)
@@ -120,6 +125,70 @@ public static class Program
                 result.IsValid,
                 $"Example '{Path.GetFileName(examplePath)}' must pass schema validation: {FormatIssues(result.Issues)}");
         }
+    }
+
+    private static void BasicEntitiesComboExampleValidatesAndPlansP301Entities()
+    {
+        var json = ReadExampleJson("basic-entities-combo.example.json");
+        var schemaResult = DrawingSpecValidator.ValidateSchemaJson(json);
+        Assert(
+            schemaResult.IsValid,
+            $"basic-entities-combo.example.json must pass schema validation: {FormatIssues(schemaResult.Issues)}");
+
+        var spec = ReadExampleSpec("basic-entities-combo.example.json");
+        var businessResult = DrawingSpecValidator.ValidateBusinessRules(spec);
+        Assert(
+            businessResult.IsValid,
+            $"basic-entities-combo.example.json must pass business validation: {FormatIssues(businessResult.Issues)}");
+
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(spec);
+        Assert(
+            plan.Validation.IsValid,
+            $"basic-entities-combo.example.json must produce a valid render plan: {FormatIssues(plan.Validation.Issues)}");
+
+        var textLayer = plan.Layers.Single(layer => layer.Name == "TEXT");
+        AssertEqual(2, textLayer.Color);
+        AssertEqual("Continuous", textLayer.LineType);
+        AssertEqual(0.18d, textLayer.LineWeight);
+
+        foreach (var expected in P301BasicEntityKinds())
+        {
+            var planned = plan.Entities.Single(entity => entity.SpecEntityId == expected.Key);
+            AssertEqual(expected.Value, planned.Kind);
+            AssertEqual(expected.Key, planned.SourceEntityId);
+        }
+
+        var line = plan.Entities.Single(entity => entity.SpecEntityId == "baseline");
+        AssertPoint(0, 0, line.Start);
+        AssertPoint(90, 0, line.End);
+
+        var polyline = plan.Entities.Single(entity => entity.SpecEntityId == "open-profile");
+        Assert(!polyline.Closed, "Open profile must remain open.");
+        AssertEqual(4, polyline.Points.Count);
+        AssertPoint(20, 25, polyline.Points[1]);
+
+        var circle = plan.Entities.Single(entity => entity.SpecEntityId == "reference-circle");
+        AssertPoint(45, 12, circle.Center);
+        AssertEqual(8d, circle.Radius);
+
+        var arc = plan.Entities.Single(entity => entity.SpecEntityId == "relief-arc");
+        AssertPoint(45, 25, arc.Center);
+        AssertEqual(14d, arc.Radius);
+        AssertEqual(180d, arc.StartAngle);
+        AssertEqual(360d, arc.EndAngle);
+
+        var text = plan.Entities.Single(entity => entity.SpecEntityId == "note-1");
+        AssertPoint(0, 38, text.Position);
+        AssertEqual("BASIC ENTITY SAMPLE", text.Value);
+        AssertEqual(3.5d, text.Height);
+        AssertEqual(0d, text.Rotation);
+
+        var mtext = plan.Entities.Single(entity => entity.SpecEntityId == "note-mtext-1");
+        AssertPoint(0, 44, mtext.Position);
+        AssertEqual("Line, polyline, circle, arc, text, and mtext", mtext.Value);
+        AssertEqual(2.5d, mtext.Height);
+
+        AssertEqual(2, plan.Dimensions.Count);
     }
 
     private static void DrawingSpecSchemaRejectsInvalidExampleFiles()
@@ -349,6 +418,38 @@ public static class Program
         AssertEqual("dim-hole-dia", plan.Dimensions.Single(dimension => dimension.Type == DimensionTypes.Diameter).SpecDimensionId);
     }
 
+    private static void RendererMapsEveryP301BasicEntityId()
+    {
+        var spec = ReadExampleSpec("basic-entities-combo.example.json");
+        var renderer = new DrawingSpecPlanRenderer();
+
+        var result = renderer.Render(spec, new RenderContext(spec.Metadata.RequestId, "enterprise-default-v1"));
+
+        Assert(result.Success, "P3-01 basic entity combo should render through the deterministic renderer stub.");
+        Assert(result.Validation.IsValid, $"Render validation should be valid: {FormatIssues(result.Validation.Issues)}");
+
+        foreach (var specEntityId in P301BasicEntityKinds().Keys)
+        {
+            var rendered = result.Entities.Single(entity => entity.SpecEntityId == specEntityId);
+            AssertEqual($"planned:{specEntityId}", rendered.CadObjectId);
+        }
+    }
+
+    private static void RendererFailuresLocateStableEntityIds()
+    {
+        var spec = ReadExampleSpec("basic-entities-combo.example.json");
+        spec.Entities.Single(entity => entity.Id == "relief-arc").Radius = 0;
+        var renderer = new DrawingSpecPlanRenderer();
+
+        var plan = renderer.CreatePlan(spec);
+
+        Assert(!plan.Validation.IsValid, "Invalid arc geometry must fail render planning.");
+        Assert(
+            plan.Validation.Issues.Any(issue =>
+                issue.Code == "invalid_arc_geometry" && issue.Path == "$.entities[relief-arc]"),
+            $"Arc render planning failure must locate relief-arc, got: {FormatIssues(plan.Validation.Issues)}");
+    }
+
     private static void RendererRejectsSpecsMissingProductionLayers()
     {
         var spec = new DrawingSpec
@@ -540,6 +641,227 @@ public static class Program
         Assert(
             source.Contains("AIEXPORT PDF export unavailable", StringComparison.Ordinal),
             "AIEXPORT must clearly log when the current ZWCAD environment cannot export PDF.");
+    }
+
+    private static void PluginWriterSupportsP301BasicEntityDispatch()
+    {
+        var source = ReadPluginSource();
+
+        Assert(
+            source.Contains("EntityFactories", StringComparison.Ordinal),
+            "ZWCAD writer should use an explicit entity dispatch table instead of keeping P1 switch growth.");
+        Assert(
+            source.Contains("[PlannedEntityKind.Arc] = CreateArc", StringComparison.Ordinal),
+            "ZWCAD writer must dispatch P3-01 arc entities.");
+        Assert(
+            source.Contains("[PlannedEntityKind.Text] = CreateText", StringComparison.Ordinal),
+            "ZWCAD writer must dispatch P3-01 text entities.");
+        Assert(
+            source.Contains("[PlannedEntityKind.MText] = CreateMText", StringComparison.Ordinal),
+            "ZWCAD writer must dispatch P3-01 mtext entities.");
+        Assert(
+            source.Contains("new Arc(", StringComparison.Ordinal)
+                && source.Contains("ToRadians(plannedEntity.StartAngle)", StringComparison.Ordinal)
+                && source.Contains("ToRadians(plannedEntity.EndAngle)", StringComparison.Ordinal),
+            "Arc writer must create a CAD Arc and convert DrawingSpec degrees to CAD radians.");
+        Assert(
+            source.Contains("new DBText", StringComparison.Ordinal)
+                && source.Contains("TextString = plannedEntity.Value", StringComparison.Ordinal),
+            "Text writer must create a DBText from the planned text value.");
+        Assert(
+            source.Contains("new MText", StringComparison.Ordinal)
+                && source.Contains("Contents = plannedEntity.Value", StringComparison.Ordinal),
+            "MText writer must create an MText from the planned text value.");
+        Assert(
+            source.Contains("new RenderedEntity(plannedEntity.SpecEntityId, objectId.ToString())", StringComparison.Ordinal),
+            "ZWCAD writer must preserve spec entity id to CAD object id mapping.");
+        Assert(
+            source.Contains("case DimensionTypes.Radius", StringComparison.Ordinal)
+                && source.Contains("CreateRadiusDimension", StringComparison.Ordinal),
+            "ZWCAD writer must support the radius dimension already present in basic-entities-combo.example.json.");
+    }
+
+    private static IReadOnlyDictionary<string, PlannedEntityKind> P301BasicEntityKinds()
+    {
+        return new Dictionary<string, PlannedEntityKind>(StringComparer.Ordinal)
+        {
+            ["baseline"] = PlannedEntityKind.Line,
+            ["open-profile"] = PlannedEntityKind.Polyline,
+            ["reference-circle"] = PlannedEntityKind.Circle,
+            ["relief-arc"] = PlannedEntityKind.Arc,
+            ["note-1"] = PlannedEntityKind.Text,
+            ["note-mtext-1"] = PlannedEntityKind.MText
+        };
+    }
+
+    private static string ReadExampleJson(string fileName)
+    {
+        return File.ReadAllText(Path.Combine(FindRepositoryRoot(), "examples", fileName));
+    }
+
+    private static DrawingSpec ReadExampleSpec(string fileName)
+    {
+        using var document = JsonDocument.Parse(ReadExampleJson(fileName));
+        var root = document.RootElement;
+
+        return new DrawingSpec
+        {
+            DrawingSpecVersion = ReadString(root, "drawingSpecVersion"),
+            Units = ReadString(root, "units"),
+            Metadata = root.TryGetProperty("metadata", out var metadata)
+                ? ReadMetadata(metadata)
+                : new DrawingMetadata(),
+            Layers = ReadLayers(root),
+            Entities = ReadEntities(root),
+            Dimensions = ReadDimensions(root),
+            Clarifications = ReadStringArray(root, "clarifications")
+        };
+    }
+
+    private static DrawingMetadata ReadMetadata(JsonElement metadata)
+    {
+        return new DrawingMetadata
+        {
+            Title = ReadString(metadata, "title"),
+            Domain = ReadString(metadata, "domain"),
+            Author = ReadString(metadata, "author"),
+            CreatedBy = ReadString(metadata, "createdBy"),
+            RequestId = ReadString(metadata, "requestId")
+        };
+    }
+
+    private static IReadOnlyList<LayerSpec> ReadLayers(JsonElement root)
+    {
+        if (!root.TryGetProperty("layers", out var layers))
+        {
+            return Array.Empty<LayerSpec>();
+        }
+
+        return layers.EnumerateArray()
+            .Select(layer => new LayerSpec
+            {
+                Name = ReadString(layer, "name"),
+                Color = ReadInt(layer, "color"),
+                LineType = ReadString(layer, "lineType"),
+                LineWeight = ReadDouble(layer, "lineWeight")
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<EntitySpec> ReadEntities(JsonElement root)
+    {
+        if (!root.TryGetProperty("entities", out var entities))
+        {
+            return Array.Empty<EntitySpec>();
+        }
+
+        return entities.EnumerateArray()
+            .Select(entity => new EntitySpec
+            {
+                Id = ReadString(entity, "id"),
+                Type = ReadString(entity, "type"),
+                Layer = ReadString(entity, "layer"),
+                Closed = ReadBoolean(entity, "closed"),
+                Points = ReadPointArray(entity, "points"),
+                Start = ReadPoint(entity, "start"),
+                End = ReadPoint(entity, "end"),
+                Center = ReadPoint(entity, "center"),
+                Position = ReadPoint(entity, "position"),
+                Radius = ReadDouble(entity, "radius"),
+                Size = ReadDouble(entity, "size"),
+                StartAngle = ReadDouble(entity, "startAngle"),
+                EndAngle = ReadDouble(entity, "endAngle"),
+                Value = ReadString(entity, "value"),
+                Height = ReadDouble(entity, "height"),
+                Rotation = ReadDouble(entity, "rotation")
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<DimensionSpec> ReadDimensions(JsonElement root)
+    {
+        if (!root.TryGetProperty("dimensions", out var dimensions))
+        {
+            return Array.Empty<DimensionSpec>();
+        }
+
+        return dimensions.EnumerateArray()
+            .Select(dimension => new DimensionSpec
+            {
+                Id = ReadString(dimension, "id"),
+                Type = ReadString(dimension, "type"),
+                Layer = ReadString(dimension, "layer"),
+                From = ReadPoint(dimension, "from"),
+                To = ReadPoint(dimension, "to"),
+                Center = ReadPoint(dimension, "center"),
+                TargetEntityId = ReadString(dimension, "targetEntityId"),
+                Offset = ReadPoint(dimension, "offset"),
+                Text = ReadString(dimension, "text")
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> ReadStringArray(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out var values))
+        {
+            return Array.Empty<string>();
+        }
+
+        return values.EnumerateArray()
+            .Select(value => value.GetString() ?? string.Empty)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<DrawingPoint> ReadPointArray(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out var values))
+        {
+            return Array.Empty<DrawingPoint>();
+        }
+
+        return values.EnumerateArray()
+            .Select(ReadPoint)
+            .ToArray();
+    }
+
+    private static DrawingPoint? ReadPoint(JsonElement obj, string propertyName)
+    {
+        return obj.TryGetProperty(propertyName, out var point) ? ReadPoint(point) : null;
+    }
+
+    private static DrawingPoint ReadPoint(JsonElement point)
+    {
+        var coordinates = point.EnumerateArray()
+            .Select(coordinate => coordinate.GetDouble())
+            .ToArray();
+
+        if (coordinates.Length != 2)
+        {
+            throw new InvalidOperationException("DrawingSpec point arrays must contain exactly two coordinates.");
+        }
+
+        return new DrawingPoint(coordinates[0], coordinates[1]);
+    }
+
+    private static string ReadString(JsonElement obj, string propertyName)
+    {
+        return obj.TryGetProperty(propertyName, out var value) ? value.GetString() ?? string.Empty : string.Empty;
+    }
+
+    private static int ReadInt(JsonElement obj, string propertyName)
+    {
+        return obj.TryGetProperty(propertyName, out var value) ? value.GetInt32() : 0;
+    }
+
+    private static double ReadDouble(JsonElement obj, string propertyName)
+    {
+        return obj.TryGetProperty(propertyName, out var value) ? value.GetDouble() : 0d;
+    }
+
+    private static bool ReadBoolean(JsonElement obj, string propertyName)
+    {
+        return obj.TryGetProperty(propertyName, out var value) && value.GetBoolean();
     }
 
     private static string ReadPluginSource()

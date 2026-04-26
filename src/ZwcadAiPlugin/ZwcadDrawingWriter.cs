@@ -12,6 +12,18 @@ namespace ZwcadAi.Plugin;
 
 public sealed class ZwcadDrawingWriter
 {
+    private static readonly IReadOnlyDictionary<PlannedEntityKind, Func<PlannedEntity, Entity>> EntityFactories =
+        new Dictionary<PlannedEntityKind, Func<PlannedEntity, Entity>>
+        {
+            [PlannedEntityKind.Polyline] = CreatePolyline,
+            [PlannedEntityKind.Circle] = CreateCircle,
+            [PlannedEntityKind.Line] = CreateLine,
+            [PlannedEntityKind.CenterLine] = CreateLine,
+            [PlannedEntityKind.Arc] = CreateArc,
+            [PlannedEntityKind.Text] = CreateText,
+            [PlannedEntityKind.MText] = CreateMText
+        };
+
     public IReadOnlyList<RenderedEntity> Render(DrawingRenderPlan plan)
     {
         if (plan == null)
@@ -96,23 +108,13 @@ public sealed class ZwcadDrawingWriter
 
     private static Entity CreateCadEntity(PlannedEntity plannedEntity)
     {
-        Entity cadEntity;
-        switch (plannedEntity.Kind)
+        if (!EntityFactories.TryGetValue(plannedEntity.Kind, out var factory))
         {
-            case PlannedEntityKind.Polyline:
-                cadEntity = CreatePolyline(plannedEntity);
-                break;
-            case PlannedEntityKind.Circle:
-                cadEntity = CreateCircle(plannedEntity);
-                break;
-            case PlannedEntityKind.Line:
-            case PlannedEntityKind.CenterLine:
-                cadEntity = CreateLine(plannedEntity);
-                break;
-            default:
-                throw new NotSupportedException($"Planned entity kind '{plannedEntity.Kind}' is not supported by P1-03.");
+            throw new NotSupportedException(
+                $"Planned entity '{plannedEntity.SpecEntityId}' has unsupported kind '{plannedEntity.Kind}'.");
         }
 
+        var cadEntity = factory(plannedEntity);
         cadEntity.Layer = plannedEntity.Layer;
         return cadEntity;
     }
@@ -157,6 +159,53 @@ public sealed class ZwcadDrawingWriter
         return new Line(ToPoint3d(plannedEntity.Start), ToPoint3d(plannedEntity.End));
     }
 
+    private static Arc CreateArc(PlannedEntity plannedEntity)
+    {
+        if (plannedEntity.Center == null || plannedEntity.Radius <= 0)
+        {
+            throw new InvalidOperationException($"Arc '{plannedEntity.SpecEntityId}' has invalid geometry.");
+        }
+
+        return new Arc(
+            ToPoint3d(plannedEntity.Center),
+            Vector3d.ZAxis,
+            plannedEntity.Radius,
+            ToRadians(plannedEntity.StartAngle),
+            ToRadians(plannedEntity.EndAngle));
+    }
+
+    private static DBText CreateText(PlannedEntity plannedEntity)
+    {
+        if (plannedEntity.Position == null || plannedEntity.Height <= 0)
+        {
+            throw new InvalidOperationException($"Text entity '{plannedEntity.SpecEntityId}' has invalid geometry.");
+        }
+
+        return new DBText
+        {
+            Position = ToPoint3d(plannedEntity.Position),
+            TextString = plannedEntity.Value,
+            Height = plannedEntity.Height,
+            Rotation = ToRadians(plannedEntity.Rotation)
+        };
+    }
+
+    private static MText CreateMText(PlannedEntity plannedEntity)
+    {
+        if (plannedEntity.Position == null || plannedEntity.Height <= 0)
+        {
+            throw new InvalidOperationException($"MText entity '{plannedEntity.SpecEntityId}' has invalid geometry.");
+        }
+
+        return new MText
+        {
+            Location = ToPoint3d(plannedEntity.Position),
+            Contents = plannedEntity.Value,
+            TextHeight = plannedEntity.Height,
+            Rotation = ToRadians(plannedEntity.Rotation)
+        };
+    }
+
     private static Entity CreateCadDimension(Database database, DrawingRenderPlan plan, PlannedDimension plannedDimension)
     {
         Entity dimension;
@@ -165,11 +214,15 @@ public sealed class ZwcadDrawingWriter
             case DimensionTypes.Linear:
                 dimension = CreateLinearDimension(database, plannedDimension);
                 break;
+            case DimensionTypes.Radius:
+                dimension = CreateRadiusDimension(database, plan, plannedDimension);
+                break;
             case DimensionTypes.Diameter:
                 dimension = CreateDiameterDimension(database, plan, plannedDimension);
                 break;
             default:
-                throw new NotSupportedException($"Dimension type '{plannedDimension.Type}' is not supported by P1-03.");
+                throw new NotSupportedException(
+                    $"Planned dimension '{plannedDimension.SpecDimensionId}' has unsupported type '{plannedDimension.Type}'.");
         }
 
         dimension.Layer = plannedDimension.Layer;
@@ -196,6 +249,36 @@ public sealed class ZwcadDrawingWriter
             ToPoint3d(plannedDimension.From),
             ToPoint3d(plannedDimension.To),
             dimensionLinePoint,
+            plannedDimension.Text,
+            database.Dimstyle);
+    }
+
+    private static RadialDimension CreateRadiusDimension(
+        Database database,
+        DrawingRenderPlan plan,
+        PlannedDimension plannedDimension)
+    {
+        var targetEntity = plan.Entities.SingleOrDefault(entity =>
+            string.Equals(entity.SpecEntityId, plannedDimension.TargetEntityId, StringComparison.Ordinal)
+            && (entity.Kind == PlannedEntityKind.Circle || entity.Kind == PlannedEntityKind.Arc));
+
+        if (targetEntity?.Center == null || targetEntity.Radius <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Radius dimension '{plannedDimension.SpecDimensionId}' targets missing or invalid entity "
+                + $"'{plannedDimension.TargetEntityId}'.");
+        }
+
+        var angle = targetEntity.Kind == PlannedEntityKind.Arc ? ToRadians(targetEntity.StartAngle) : 0d;
+        var chordPoint = new Point3d(
+            targetEntity.Center.X + targetEntity.Radius * Math.Cos(angle),
+            targetEntity.Center.Y + targetEntity.Radius * Math.Sin(angle),
+            0);
+
+        return new RadialDimension(
+            ToPoint3d(targetEntity.Center),
+            chordPoint,
+            0,
             plannedDimension.Text,
             database.Dimstyle);
     }
@@ -230,6 +313,11 @@ public sealed class ZwcadDrawingWriter
     private static Point3d ToPoint3d(DrawingPoint point)
     {
         return new Point3d(point.X, point.Y, 0);
+    }
+
+    private static double ToRadians(double degrees)
+    {
+        return degrees * Math.PI / 180d;
     }
 
     private static LineWeight ToLineWeight(double lineWeightMm)

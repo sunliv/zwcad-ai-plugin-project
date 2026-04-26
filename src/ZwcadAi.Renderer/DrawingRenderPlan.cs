@@ -61,7 +61,19 @@ public sealed class PlannedEntity
 
     public DrawingPoint? Center { get; set; }
 
+    public DrawingPoint? Position { get; set; }
+
     public double Radius { get; set; }
+
+    public double StartAngle { get; set; }
+
+    public double EndAngle { get; set; }
+
+    public string Value { get; set; } = string.Empty;
+
+    public double Height { get; set; }
+
+    public double Rotation { get; set; }
 }
 
 public sealed class PlannedDimension
@@ -104,7 +116,8 @@ public enum PlannedEntityKind
     Circle,
     CenterLine,
     Arc,
-    Text
+    Text,
+    MText
 }
 
 public sealed class DrawingSpecPlanRenderer : IRenderer
@@ -155,11 +168,26 @@ public sealed class DrawingSpecPlanRenderer : IRenderer
                         End = entity.End
                     });
                     break;
+                case EntityTypes.Arc:
+                    plannedEntities.Add(new PlannedEntity(entity.Id, entity.Id, PlannedEntityKind.Arc, entity.Layer)
+                    {
+                        Center = entity.Center,
+                        Radius = entity.Radius,
+                        StartAngle = entity.StartAngle,
+                        EndAngle = entity.EndAngle
+                    });
+                    break;
+                case EntityTypes.Text:
+                    plannedEntities.Add(CreatePlannedTextEntity(entity, PlannedEntityKind.Text));
+                    break;
+                case EntityTypes.MText:
+                    plannedEntities.Add(CreatePlannedTextEntity(entity, PlannedEntityKind.MText));
+                    break;
                 default:
                     issues.Add(new ValidationIssue(
                         "unsupported_entity_type",
-                        $"entities[{entity.Id}].type",
-                        $"Entity type '{entity.Type}' is not supported by the P1-03 renderer.",
+                        $"$.entities[{entity.Id}].type",
+                        $"Entity type '{entity.Type}' is not supported by the P3 renderer.",
                         ValidationSeverity.Error));
                     break;
             }
@@ -207,6 +235,17 @@ public sealed class DrawingSpecPlanRenderer : IRenderer
             .ToArray();
 
         return new RenderResult(true, renderedEntities, plan.Validation);
+    }
+
+    private static PlannedEntity CreatePlannedTextEntity(EntitySpec entity, PlannedEntityKind kind)
+    {
+        return new PlannedEntity(entity.Id, entity.Id, kind, entity.Layer)
+        {
+            Position = entity.Position,
+            Value = entity.Value,
+            Height = entity.Height,
+            Rotation = entity.Rotation
+        };
     }
 
     private static void AddCenterMarkLines(ICollection<PlannedEntity> plannedEntities, EntitySpec entity)

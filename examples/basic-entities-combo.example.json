@@ -72,6 +72,15 @@
       "value": "BASIC ENTITY SAMPLE",
       "height": 3.5,
       "rotation": 0
+    },
+    {
+      "id": "note-mtext-1",
+      "type": "mtext",
+      "layer": "TEXT",
+      "position": [0, 44],
+      "value": "Line, polyline, circle, arc, text, and mtext",
+      "height": 2.5,
+      "rotation": 0
     }
   ],
   "dimensions": [
