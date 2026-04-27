@@ -214,15 +214,22 @@ public sealed class ZwcadDrawingWriter
             case DimensionTypes.Linear:
                 dimension = CreateLinearDimension(database, plannedDimension);
                 break;
+            case DimensionTypes.Aligned:
+                dimension = CreateAlignedDimension(database, plannedDimension);
+                break;
             case DimensionTypes.Radius:
                 dimension = CreateRadiusDimension(database, plan, plannedDimension);
                 break;
             case DimensionTypes.Diameter:
                 dimension = CreateDiameterDimension(database, plan, plannedDimension);
                 break;
+            case DimensionTypes.Angular:
+                dimension = CreateAngularDimension(database, plannedDimension);
+                break;
             default:
-                throw new NotSupportedException(
-                    $"Planned dimension '{plannedDimension.SpecDimensionId}' has unsupported type '{plannedDimension.Type}'.");
+                throw CreateDimensionFailure(
+                    plannedDimension,
+                    $"Unsupported dimension type '{plannedDimension.Type}'.");
         }
 
         dimension.Layer = plannedDimension.Layer;
@@ -233,22 +240,34 @@ public sealed class ZwcadDrawingWriter
     {
         if (plannedDimension.From == null || plannedDimension.To == null || plannedDimension.Offset == null)
         {
-            throw new InvalidOperationException($"Linear dimension '{plannedDimension.SpecDimensionId}' has invalid geometry.");
+            throw CreateDimensionFailure(plannedDimension, "Linear dimension has invalid geometry.");
         }
 
         var rotation = Math.Atan2(
             plannedDimension.To.Y - plannedDimension.From.Y,
             plannedDimension.To.X - plannedDimension.From.X);
-        var dimensionLinePoint = new Point3d(
-            plannedDimension.From.X + plannedDimension.Offset.X,
-            plannedDimension.From.Y + plannedDimension.Offset.Y,
-            0);
+        var dimensionLinePoint = ToOffsetPoint3d(plannedDimension.From, plannedDimension.Offset);
 
         return new RotatedDimension(
             rotation,
             ToPoint3d(plannedDimension.From),
             ToPoint3d(plannedDimension.To),
             dimensionLinePoint,
+            plannedDimension.Text,
+            database.Dimstyle);
+    }
+
+    private static AlignedDimension CreateAlignedDimension(Database database, PlannedDimension plannedDimension)
+    {
+        if (plannedDimension.From == null || plannedDimension.To == null || plannedDimension.Offset == null)
+        {
+            throw CreateDimensionFailure(plannedDimension, "Aligned dimension has invalid geometry.");
+        }
+
+        return new AlignedDimension(
+            ToPoint3d(plannedDimension.From),
+            ToPoint3d(plannedDimension.To),
+            ToOffsetPoint3d(plannedDimension.From, plannedDimension.Offset),
             plannedDimension.Text,
             database.Dimstyle);
     }
@@ -264,9 +283,9 @@ public sealed class ZwcadDrawingWriter
 
         if (targetEntity?.Center == null || targetEntity.Radius <= 0)
         {
-            throw new InvalidOperationException(
-                $"Radius dimension '{plannedDimension.SpecDimensionId}' targets missing or invalid entity "
-                + $"'{plannedDimension.TargetEntityId}'.");
+            throw CreateDimensionFailure(
+                plannedDimension,
+                $"Radius dimension targets missing or invalid entity '{plannedDimension.TargetEntityId}'.");
         }
 
         var angle = targetEntity.Kind == PlannedEntityKind.Arc ? ToRadians(targetEntity.StartAngle) : 0d;
@@ -294,15 +313,34 @@ public sealed class ZwcadDrawingWriter
 
         if (targetCircle?.Center == null || targetCircle.Radius <= 0)
         {
-            throw new InvalidOperationException(
-                $"Diameter dimension '{plannedDimension.SpecDimensionId}' targets missing or invalid circle "
-                + $"'{plannedDimension.TargetEntityId}'.");
+            throw CreateDimensionFailure(
+                plannedDimension,
+                $"Diameter dimension targets missing or invalid circle '{plannedDimension.TargetEntityId}'.");
         }
 
         var left = new Point3d(targetCircle.Center.X - targetCircle.Radius, targetCircle.Center.Y, 0);
         var right = new Point3d(targetCircle.Center.X + targetCircle.Radius, targetCircle.Center.Y, 0);
 
         return new DiametricDimension(left, right, 0, plannedDimension.Text, database.Dimstyle);
+    }
+
+    private static Point3AngularDimension CreateAngularDimension(Database database, PlannedDimension plannedDimension)
+    {
+        if (plannedDimension.Center == null
+            || plannedDimension.From == null
+            || plannedDimension.To == null
+            || plannedDimension.Offset == null)
+        {
+            throw CreateDimensionFailure(plannedDimension, "Angular dimension has invalid geometry.");
+        }
+
+        return new Point3AngularDimension(
+            ToPoint3d(plannedDimension.Center),
+            ToPoint3d(plannedDimension.From),
+            ToPoint3d(plannedDimension.To),
+            ToOffsetPoint3d(plannedDimension.Center, plannedDimension.Offset),
+            plannedDimension.Text,
+            database.Dimstyle);
     }
 
     private static Point2d ToPoint2d(DrawingPoint point)
@@ -313,6 +351,17 @@ public sealed class ZwcadDrawingWriter
     private static Point3d ToPoint3d(DrawingPoint point)
     {
         return new Point3d(point.X, point.Y, 0);
+    }
+
+    private static Point3d ToOffsetPoint3d(DrawingPoint anchor, DrawingPoint offset)
+    {
+        return new Point3d(anchor.X + offset.X, anchor.Y + offset.Y, 0);
+    }
+
+    private static InvalidOperationException CreateDimensionFailure(PlannedDimension plannedDimension, string message)
+    {
+        return new InvalidOperationException(
+            $"Dimension '$.dimensions[{plannedDimension.SpecDimensionId}]' failed to render: {message}");
     }
 
     private static double ToRadians(double degrees)

@@ -33,6 +33,9 @@ public static class Program
             ("DrawingSpec business rules reject incomplete angular dimensions", DrawingSpecBusinessRulesRejectIncompleteAngularDimensions),
             ("Renderer plans P1-03 plate entities on standard layers", RendererPlansP103PlateEntitiesOnStandardLayers),
             ("Renderer maps every P3-01 basic entity id", RendererMapsEveryP301BasicEntityId),
+            ("Renderer plans P3-02 aligned and angular dimensions", RendererPlansP302AlignedAndAngularDimensions),
+            ("Renderer plans P3-02 hole array centerlines", RendererPlansP302HoleArrayCenterlines),
+            ("Renderer dimension failures locate stable dimension ids", RendererDimensionFailuresLocateStableDimensionIds),
             ("Renderer failures locate stable entity ids", RendererFailuresLocateStableEntityIds),
             ("Renderer rejects specs missing production layers", RendererRejectsSpecsMissingProductionLayers),
             ("Renderer result preserves spec-to-CAD mapping", RendererResultPreservesMapping),
@@ -44,7 +47,8 @@ public static class Program
             ("Plugin registers AIEXPORT command", PluginRegistersAiExportCommand),
             ("AIEXPORT saves a DWG copy without saving the active drawing", PluginAiExportSavesDwgCopyWithoutSavingActiveDrawing),
             ("AIEXPORT covers the PDF plot-to-file path", PluginAiExportCoversPdfPlotToFilePath),
-            ("Plugin writer supports P3-01 basic entity dispatch", PluginWriterSupportsP301BasicEntityDispatch)
+            ("Plugin writer supports P3-01 basic entity dispatch", PluginWriterSupportsP301BasicEntityDispatch),
+            ("Plugin writer supports P3-02 dimensions and center marks", PluginWriterSupportsP302DimensionsAndCenterMarks)
         };
 
         foreach (var test in tests)
@@ -435,6 +439,134 @@ public static class Program
         }
     }
 
+    private static void RendererPlansP302AlignedAndAngularDimensions()
+    {
+        var json = ReadExampleJson("annotation-angular-aligned.example.json");
+        var schemaResult = DrawingSpecValidator.ValidateSchemaJson(json);
+        Assert(
+            schemaResult.IsValid,
+            $"annotation-angular-aligned.example.json must pass schema validation: {FormatIssues(schemaResult.Issues)}");
+
+        var spec = ReadExampleSpec("annotation-angular-aligned.example.json");
+        var businessResult = DrawingSpecValidator.ValidateBusinessRules(spec);
+        Assert(
+            businessResult.IsValid,
+            $"annotation-angular-aligned.example.json must pass business validation: {FormatIssues(businessResult.Issues)}");
+
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(spec);
+        Assert(
+            plan.Validation.IsValid,
+            $"annotation-angular-aligned.example.json must produce a valid render plan: {FormatIssues(plan.Validation.Issues)}");
+
+        AssertEqual(2, plan.Dimensions.Count);
+
+        var aligned = plan.Dimensions.Single(dimension => dimension.SpecDimensionId == "dim-angled-edge");
+        AssertEqual(DimensionTypes.Aligned, aligned.Type);
+        AssertEqual(CadLayerNames.Dimension, aligned.Layer);
+        AssertPoint(0, 0, aligned.From);
+        AssertPoint(40, 30, aligned.To);
+        AssertPoint(8, 8, aligned.Offset);
+        AssertEqual("50", aligned.Text);
+
+        var angular = plan.Dimensions.Single(dimension => dimension.SpecDimensionId == "dim-angle-between-edges");
+        AssertEqual(DimensionTypes.Angular, angular.Type);
+        AssertEqual(CadLayerNames.Dimension, angular.Layer);
+        AssertPoint(0, 0, angular.Center);
+        AssertPoint(50, 0, angular.From);
+        AssertPoint(40, 30, angular.To);
+        AssertPoint(18, 14, angular.Offset);
+        AssertEqual("36.9%%d", angular.Text);
+
+        var result = new DrawingSpecPlanRenderer().Render(spec, new RenderContext(spec.Metadata.RequestId, "enterprise-default-v1"));
+        Assert(result.Success, "P3-02 annotation example should render through the deterministic renderer stub.");
+        Assert(
+            result.Entities.Any(entity => entity.SpecEntityId == "dim-angled-edge")
+                && result.Entities.Any(entity => entity.SpecEntityId == "dim-angle-between-edges"),
+            "P3-02 renderer result must preserve aligned and angular dimension ids.");
+    }
+
+    private static void RendererPlansP302HoleArrayCenterlines()
+    {
+        var spec = ReadExampleSpec("hole-array-centerlines.example.json");
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(spec);
+
+        Assert(
+            plan.Validation.IsValid,
+            $"hole-array-centerlines.example.json must produce a valid render plan: {FormatIssues(plan.Validation.Issues)}");
+
+        AssertEqual(3, plan.Entities.Count(entity => entity.Kind == PlannedEntityKind.Circle));
+        AssertEqual(7, plan.Entities.Count(entity => entity.Kind == PlannedEntityKind.CenterLine));
+
+        var explicitArrayCenterline = plan.Entities.Single(entity => entity.SpecEntityId == "array-centerline");
+        AssertEqual(PlannedEntityKind.CenterLine, explicitArrayCenterline.Kind);
+        AssertEqual("array-centerline", explicitArrayCenterline.SourceEntityId);
+        AssertEqual(CadLayerNames.Center, explicitArrayCenterline.Layer);
+        AssertPoint(20, 35, explicitArrayCenterline.Start);
+        AssertPoint(130, 35, explicitArrayCenterline.End);
+        AssertEqual(110d, CenterLineLength(explicitArrayCenterline));
+
+        foreach (var holeCenterId in new[] { "hole-1-center", "hole-2-center", "hole-3-center" })
+        {
+            var centerLines = plan.Entities
+                .Where(entity => entity.SourceEntityId == holeCenterId)
+                .OrderBy(entity => entity.SpecEntityId, StringComparer.Ordinal)
+                .ToArray();
+
+            AssertEqual(2, centerLines.Length);
+            Assert(centerLines.All(entity => entity.Layer == CadLayerNames.Center), $"{holeCenterId} centerlines must stay on CENTER.");
+            Assert(centerLines.Any(entity => entity.SpecEntityId == $"{holeCenterId}-horizontal"), $"{holeCenterId} must map a horizontal derived id.");
+            Assert(centerLines.Any(entity => entity.SpecEntityId == $"{holeCenterId}-vertical"), $"{holeCenterId} must map a vertical derived id.");
+            Assert(
+                centerLines.All(entity => CenterLineLength(entity) == 22d),
+                $"{holeCenterId} centerlines must expand size 11 to total length 22.");
+        }
+
+        AssertEqual(3, plan.Dimensions.Count);
+
+        var pitch1 = plan.Dimensions.Single(dimension => dimension.SpecDimensionId == "dim-array-pitch-1");
+        AssertEqual(DimensionTypes.Linear, pitch1.Type);
+        AssertPoint(35, 35, pitch1.From);
+        AssertPoint(75, 35, pitch1.To);
+        AssertPoint(0, -18, pitch1.Offset);
+        AssertEqual("40", pitch1.Text);
+
+        var pitch2 = plan.Dimensions.Single(dimension => dimension.SpecDimensionId == "dim-array-pitch-2");
+        AssertEqual(DimensionTypes.Linear, pitch2.Type);
+        AssertPoint(75, 35, pitch2.From);
+        AssertPoint(115, 35, pitch2.To);
+        AssertPoint(0, -18, pitch2.Offset);
+        AssertEqual("40", pitch2.Text);
+
+        var diameter = plan.Dimensions.Single(dimension => dimension.Type == DimensionTypes.Diameter);
+        AssertEqual("dim-hole-dia", diameter.SpecDimensionId);
+        AssertEqual("hole-1", diameter.TargetEntityId);
+        AssertEqual("3X %%c12", diameter.Text);
+
+        var result = new DrawingSpecPlanRenderer().Render(spec, new RenderContext(spec.Metadata.RequestId, "enterprise-default-v1"));
+        Assert(result.Success, "P3-02 hole array example should render through the deterministic renderer stub.");
+        Assert(
+            result.Entities.Any(entity => entity.SpecEntityId == "hole-1-center-horizontal")
+                && result.Entities.Any(entity => entity.SpecEntityId == "hole-3-center-vertical")
+                && result.Entities.Any(entity => entity.SpecEntityId == "array-centerline")
+                && result.Entities.Any(entity => entity.SpecEntityId == "dim-hole-dia"),
+            "P3-02 renderer result must preserve centerline and dimension ids.");
+    }
+
+    private static void RendererDimensionFailuresLocateStableDimensionIds()
+    {
+        var spec = ReadExampleSpec("annotation-angular-aligned.example.json");
+        spec.Dimensions.Single(dimension => dimension.Id == "dim-angle-between-edges").Offset = null;
+        var renderer = new DrawingSpecPlanRenderer();
+
+        var plan = renderer.CreatePlan(spec);
+
+        Assert(!plan.Validation.IsValid, "Invalid angular dimension geometry must fail render planning.");
+        Assert(
+            plan.Validation.Issues.Any(issue =>
+                issue.Code == "missing_dimension_geometry" && issue.Path == "$.dimensions[dim-angle-between-edges]"),
+            $"Angular dimension failure must locate dim-angle-between-edges, got: {FormatIssues(plan.Validation.Issues)}");
+    }
+
     private static void RendererFailuresLocateStableEntityIds()
     {
         var spec = ReadExampleSpec("basic-entities-combo.example.json");
@@ -679,6 +811,34 @@ public static class Program
             source.Contains("case DimensionTypes.Radius", StringComparison.Ordinal)
                 && source.Contains("CreateRadiusDimension", StringComparison.Ordinal),
             "ZWCAD writer must support the radius dimension already present in basic-entities-combo.example.json.");
+    }
+
+    private static void PluginWriterSupportsP302DimensionsAndCenterMarks()
+    {
+        var source = ReadPluginSource();
+
+        Assert(
+            source.Contains("case DimensionTypes.Aligned", StringComparison.Ordinal)
+                && source.Contains("CreateAlignedDimension", StringComparison.Ordinal),
+            "ZWCAD writer must dispatch P3-02 aligned dimensions.");
+        Assert(
+            source.Contains("case DimensionTypes.Angular", StringComparison.Ordinal)
+                && source.Contains("CreateAngularDimension", StringComparison.Ordinal),
+            "ZWCAD writer must dispatch P3-02 angular dimensions.");
+        Assert(
+            source.Contains("new AlignedDimension(", StringComparison.Ordinal),
+            "Aligned dimension writer must create a CAD AlignedDimension.");
+        Assert(
+            source.Contains("new Point3AngularDimension(", StringComparison.Ordinal),
+            "Angular dimension writer must create a CAD Point3AngularDimension.");
+        Assert(
+            source.Contains("CreateDimensionFailure", StringComparison.Ordinal)
+                && source.Contains("$.dimensions[", StringComparison.Ordinal)
+                && source.Contains("plannedDimension.SpecDimensionId", StringComparison.Ordinal),
+            "Dimension writer failures must locate stable DrawingSpec dimension ids.");
+        Assert(
+            source.Contains("[PlannedEntityKind.CenterLine] = CreateLine", StringComparison.Ordinal),
+            "ZWCAD writer must render center mark expansions and explicit centerlines through line entities.");
     }
 
     private static IReadOnlyDictionary<string, PlannedEntityKind> P301BasicEntityKinds()
@@ -959,6 +1119,18 @@ public static class Program
             && actual != null
             && Math.Abs(expected.X - actual.X) < 0.000001
             && Math.Abs(expected.Y - actual.Y) < 0.000001;
+    }
+
+    private static double CenterLineLength(PlannedEntity entity)
+    {
+        if (entity.Start == null || entity.End == null)
+        {
+            throw new InvalidOperationException($"Centerline '{entity.SpecEntityId}' must include start and end points.");
+        }
+
+        var dx = entity.End.X - entity.Start.X;
+        var dy = entity.End.Y - entity.Start.Y;
+        return Math.Sqrt((dx * dx) + (dy * dy));
     }
 
     private static string MinimalSpecJson(string entityJson)

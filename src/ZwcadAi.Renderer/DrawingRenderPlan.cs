@@ -162,7 +162,7 @@ public sealed class DrawingSpecPlanRenderer : IRenderer
                     AddCenterMarkLines(plannedEntities, entity);
                     break;
                 case EntityTypes.Line:
-                    plannedEntities.Add(new PlannedEntity(entity.Id, entity.Id, PlannedEntityKind.Line, entity.Layer)
+                    plannedEntities.Add(new PlannedEntity(entity.Id, entity.Id, GetLineKind(entity), entity.Layer)
                     {
                         Start = entity.Start,
                         End = entity.End
@@ -246,6 +246,13 @@ public sealed class DrawingSpecPlanRenderer : IRenderer
             Height = entity.Height,
             Rotation = entity.Rotation
         };
+    }
+
+    private static PlannedEntityKind GetLineKind(EntitySpec entity)
+    {
+        return string.Equals(entity.Layer, CadLayerNames.Center, StringComparison.Ordinal)
+            ? PlannedEntityKind.CenterLine
+            : PlannedEntityKind.Line;
     }
 
     private static void AddCenterMarkLines(ICollection<PlannedEntity> plannedEntities, EntitySpec entity)
