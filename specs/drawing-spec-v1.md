@@ -224,7 +224,7 @@ This distinction keeps schema errors close to raw JSON structure while keeping b
 
 ## Prompt Contract Notes
 
-P4 AI prompts must instruct models to:
+P4-01 fixes the model prompt contract at `prompts/model-prompt-contract-v1.md` with prompt version `p4-01-model-prompt-contract-v1`. AI prompts must instruct models to:
 
 - Output JSON only.
 - Use point arrays `[x, y]` on the wire.
@@ -233,3 +233,4 @@ P4 AI prompts must instruct models to:
 - Use stable ids for entities and dimensions.
 - Put dimensions in top-level `dimensions[]`, never as entity type `"dimension"`.
 - Ask clarifying questions instead of guessing missing engineering values.
+- Repair loops may only repair DrawingSpec JSON fields identified by stable validation issue paths.

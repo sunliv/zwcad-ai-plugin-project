@@ -190,6 +190,22 @@ Manual ZWCAD 2025 visual validation completed in the CAD process after the line 
 - Confirmed the render completed without the previous `missing_linetype` failure for `CENTER`.
 - Confirmed the generated output visually matched the expected P3 layer/style baseline for layer colors, line types, line weights, text styles, and dimension styles.
 
+## P4-01 Model Prompt Contract Evidence
+
+Date: 2026-04-28
+
+Implemented and build/test verified against the local source baseline:
+
+- Added prompt contract version `p4-01-model-prompt-contract-v1` in `prompts/model-prompt-contract-v1.md` and `prompts/gpt-system-prompt.md`.
+- `AiDrawingSpecRequest` now carries the natural-language request boundary, prompt version, DrawingSpec version, allowed entity/dimension types, and `enterprise-default-v1` profile id.
+- `AiDrawingSpecResponse` now separates `DrawingSpec`, `NeedsClarification`, and `Rejected` response kinds.
+- `AiModelIssue` maps low-level validation/render/service failures into stable `code`, `path`, `message`, `severity`, `source`, and `repairable` fields.
+- `AiDrawingSpecRepairRequest` defines the bounded repair loop: previous invalid DrawingSpec JSON, mapped issues, `RepairDrawingSpecOnly`, and max 2 attempts.
+- Enterprise CAD standards remain centralized in `CadLayerStandards`, `CadTextStyleStandards`, and `CadDimensionStyleStandards`; P4/P5 profile loading stays an interface design item.
+- P3 lightweight regression gate remains fixed `AIDRAW`, layer/linetype/text/dimension style checks, and the 44-test automated suite. P6 still owns DWG reverse extraction, batch regression, key dimension comparison, and export artifact verification.
+- Automated verification: `dotnet .\src\ZwcadAi.Tests\bin\x64\Debug\net8.0\ZwcadAi.Tests.dll` passed 44 tests.
+- Build verification: `dotnet build ZwcadAi.sln -p:Platform=x64` passed and compiled `ZwcadAiPlugin.dll`.
+
 ## Open Environment Gaps
 
 - ZWCAD 2026 and Windows 10 compatibility validation remain pending for later compatibility work.

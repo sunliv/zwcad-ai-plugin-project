@@ -105,6 +105,15 @@ AI 服务输出：
 }
 ```
 
+P4-01 模型提示词合同：
+
+- Prompt 版本固定为 `p4-01-model-prompt-contract-v1`，详细合同见 `prompts/model-prompt-contract-v1.md`。
+- 自然语言只进入 `AiDrawingSpecRequest.UserRequest`，不是命令通道；模型不得返回 LISP、SCR、COM、.NET、ZRX、shell 或任意 CAD 命令。
+- 模型原始响应必须是 DrawingSpec v1 JSON 根对象，不额外包一层自由 envelope；服务适配层再映射为 `AiDrawingSpecResponse.Kind = DrawingSpec | NeedsClarification | Rejected`。
+- Schema 失败、业务规则失败和渲染/服务失败统一映射为稳定 issue：`code`、`path`、`message`、`severity`、`source`、`repairable`。
+- 修复循环只接收上一轮 `invalidDrawingSpecJson` 与已映射的稳定 issue 列表，最多 2 次，并且只能修复 DrawingSpec JSON；关键工程参数缺失时必须追问用户。
+- `enterprise-default-v1` 在 P4-01 中仍只是 `layerStandard` / profile id；企业标准配置化作为 P4/P5 接口设计项，不在本任务改动 `CadLayerStandards`、`CadTextStyleStandards`、`CadDimensionStyleStandards` 的集中入口。
+
 插件内部接口：
 
 - `ValidateSchema(DrawingSpec spec) -> ValidationResult`

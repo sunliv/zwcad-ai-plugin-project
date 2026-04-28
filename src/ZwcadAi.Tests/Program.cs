@@ -18,7 +18,7 @@ public static class Program
         var tests = new List<(string Name, Action Execute)>
         {
             ("Core uses the locked MVP domain", CoreUsesLockedMvpDomain),
-            ("AI request defaults to mechanical plate", AiRequestDefaultsToMechanicalPlate),
+            ("AI request defaults to P4 model prompt contract", AiRequestDefaultsToP4ModelPromptContract),
             ("Fixed rectangular plate sample matches P1-03 geometry", FixedRectangularPlateSampleMatchesP103Geometry),
             ("DrawingSpec schema accepts valid example files", DrawingSpecSchemaAcceptsValidExampleFiles),
             ("Basic entities combo example validates and plans P3-01 entities", BasicEntitiesComboExampleValidatesAndPlansP301Entities),
@@ -78,13 +78,46 @@ public static class Program
         AssertEqual("mechanical_plate", DrawingDomain.MechanicalPlate);
     }
 
-    private static void AiRequestDefaultsToMechanicalPlate()
+    private static void AiRequestDefaultsToP4ModelPromptContract()
     {
         var request = new AiDrawingSpecRequest();
 
+        AssertEqual(ModelPromptContract.PromptVersion, request.PromptVersion);
         AssertEqual(DrawingDomain.MechanicalPlate, request.Domain);
         AssertEqual("mm", request.Units);
-        AssertEqual("1.0", request.DrawingSpecVersion);
+        AssertEqual(DrawingSpecWireFormat.Version, request.DrawingSpecVersion);
+        AssertEqual(ModelPromptContract.LayerStandard, request.LayerStandard);
+        AssertEqual(ModelPromptContract.MaxClarificationQuestions, request.MaxClarificationQuestions);
+        AssertSequenceEqual(ModelPromptContract.AllowedEntityTypes, request.AllowedEntityTypes);
+        AssertSequenceEqual(ModelPromptContract.AllowedDimensionTypes, request.AllowedDimensionTypes);
+
+        var validationIssue = new ValidationIssue(
+            "missing_required",
+            "$.entities[0].center",
+            "Property 'center' is required.",
+            ValidationSeverity.Error);
+        var modelIssue = AiModelIssue.FromValidationIssue(
+            validationIssue,
+            AiModelIssueSource.SchemaValidation,
+            ModelPromptContract.IsRepairableIssueCode(validationIssue.Code));
+
+        AssertEqual(validationIssue.Code, modelIssue.Code);
+        AssertEqual(validationIssue.Path, modelIssue.Path);
+        AssertEqual(validationIssue.Message, modelIssue.Message);
+        AssertEqual(AiModelIssueSource.SchemaValidation, modelIssue.Source);
+        Assert(modelIssue.Repairable, "Schema validation issue should be eligible for bounded model repair.");
+
+        var repairRequest = new AiDrawingSpecRepairRequest
+        {
+            OriginalRequest = request,
+            InvalidDrawingSpecJson = "{\"entities\":[]}",
+            Issues = new[] { modelIssue }
+        };
+
+        AssertEqual(AiRepairStrategy.RepairDrawingSpecOnly, repairRequest.RepairStrategy);
+        AssertEqual(1, repairRequest.RepairAttempt);
+        AssertEqual(ModelPromptContract.MaxRepairAttempts, repairRequest.MaxRepairAttempts);
+        AssertEqual(1, repairRequest.Issues.Count);
     }
 
     private static void FixedRectangularPlateSampleMatchesP103Geometry()

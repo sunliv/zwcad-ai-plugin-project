@@ -299,6 +299,7 @@ Status:
 - text/mtext 已解析默认文字样式；dimension 已解析默认标注样式，并保留集中标准入口供后续配置化。
 - `RenderResult` 已输出最小几何摘要：状态、entity/dimension 数量、类型计数、图层计数、bounding box、`specEntityId -> cadObjectId`、失败/取消 issue、导出占位状态。
 - 已在 ZWCAD 2025 内完成 `NETLOAD` + `AIDRAW` 视觉验收，图层/样式基线通过。
+- P4 开始前保留一条轻量回归入口：固定样例 `AIDRAW`、图层/线型/文字/标注样式检查、P3 关闭时的 44 项自动测试，作为 AI 接入防回退基线。
 - P6 仍保留 DWG 反向提取、批量回归和关键尺寸比对的完整 GeometrySummary 工作。
 
 ## Phase P4: AI Service Integration
@@ -310,12 +311,16 @@ Goal: 让模型稳定输出 DrawingSpec 或澄清问题。
 Context Files:
 
 - `prompts/gpt-system-prompt.md`
+- `prompts/model-prompt-contract-v1.md`
 - `specs/drawing-spec-v1.schema.json`
+- `src/ZwcadAi.AiService/IAiDrawingSpecService.cs`
 
 Deliverables:
 
 - Prompt 版本文件。
 - 模型输入输出结构。
+- DrawingSpec Schema 边界说明。
+- 失败 issue 映射。
 - 失败重试策略。
 
 Acceptance Criteria:
@@ -323,6 +328,9 @@ Acceptance Criteria:
 - 模型不输出自由 CAD 命令。
 - 模型缺参时返回澄清问题。
 - 模型输出可被 Schema 校验。
+- Schema / business / renderer / service 失败能映射为稳定 issue。
+- 修复循环只修复 DrawingSpec JSON，重试次数有限。
+- 企业标准配置化只作为 P4/P5 接口设计项，不在 P4-01 改动标准加载实现。
 
 ### P4-02 Implement Local AI Service Adapter
 
