@@ -123,14 +123,6 @@ Code-facing request type: `AiDrawingSpecRepairRequest`.
 
 ```json
 {
-  "originalRequest": {
-    "promptVersion": "p4-01-model-prompt-contract-v1",
-    "userRequest": "same natural-language request",
-    "units": "mm",
-    "domain": "mechanical_plate",
-    "drawingSpecVersion": "1.0",
-    "layerStandard": "enterprise-default-v1"
-  },
   "invalidDrawingSpecJson": "{ ... previous model response ... }",
   "issues": [
     {
@@ -147,7 +139,7 @@ Code-facing request type: `AiDrawingSpecRepairRequest`.
 
 Repair rules:
 
-1. Repair only the DrawingSpec JSON. Do not reinterpret the user request from scratch.
+1. Repair only the provided DrawingSpec JSON. The repair payload intentionally excludes the original user request, full DWG content, geometry summaries, screenshots, and arbitrary context.
 2. Use the provided `issues[].path` and `issues[].code` as the repair target list.
 3. Keep stable ids unless the issue is the id itself.
 4. Do not add new geometry that was not requested.

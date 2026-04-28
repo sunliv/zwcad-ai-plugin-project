@@ -44,7 +44,7 @@
 - [ ] 接入模型服务（P4-02 已完成本地 adapter/client seam；真实 HTTP/本地模型 provider 仍未接入）。
 - [x] 实现结构化输出（P4-02 本地 deterministic adapter 已将原始输出映射为 `DrawingSpec` / `NeedsClarification` / `Rejected`）。
 - [ ] 实现缺参追问（P4-02 已映射 clarification 响应；UI 追问流程仍未实现）。
-- [ ] 实现校验失败修复循环（P4-02 已实现 repair attempt limit；完整 P4-03 修复循环仍未实现）。
+- [x] 实现校验失败修复循环（P4-03 已覆盖 schema/business validation 失败后的 bounded DrawingSpec-only repair；clarification/unsafe command 不进入 repair）。
 - [ ] 实现调用日志和脱敏（P4-02 已保留默认不记录敏感全文的配置位；完整日志管线仍未实现）。
 
 ## P5 Plugin UI

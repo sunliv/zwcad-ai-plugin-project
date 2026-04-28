@@ -32,7 +32,7 @@
 - [x] AI 输出限定为 DrawingSpec（P4-02 本地 adapter 执行 JSON-only 边界，clarification 映射为独立响应类型）。
 - [x] 已有 JSON Schema。
 - [x] 已有缺参追问策略（P4-01 合同和 P4-02 adapter 映射已覆盖；UI 追问流程未完成）。
-- [ ] 已有失败重试策略（P4-02 已有 adapter options、基础 timeout retry seam 和 repair attempt guard；真实 provider timeout/retry/cancellation policy 仍未完成）。
+- [x] 已有失败重试策略（P4-03 已实现 DrawingSpec-only bounded repair loop；真实 provider timeout/retry/cancellation hardening 仍放到 P4-04 或独立 provider 接入任务）。
 - [ ] 已有模型调用日志策略。
 - [x] 已明确云端、私有网关或本地模型路线（P4-02 优先本地 adapter/client seam，后续可挂 HTTP、本地模型或私有网关 provider）。
 

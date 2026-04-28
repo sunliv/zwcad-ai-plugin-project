@@ -37,8 +37,6 @@ public sealed class AiDrawingSpecRequest
 
 public sealed class AiDrawingSpecRepairRequest
 {
-    public AiDrawingSpecRequest OriginalRequest { get; set; } = new AiDrawingSpecRequest();
-
     public string InvalidDrawingSpecJson { get; set; } = string.Empty;
 
     public IReadOnlyList<AiModelIssue> Issues { get; set; } = Array.Empty<AiModelIssue>();

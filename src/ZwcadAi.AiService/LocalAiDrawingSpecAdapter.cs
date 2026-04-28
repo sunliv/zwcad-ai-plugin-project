@@ -76,9 +76,16 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
         var rawResponse = ExecuteModelCall(
             options => _modelClient.CreateDrawingSpec(request, options));
 
-        return rawResponse.Success
-            ? MapRawModelOutput(rawResponse.RawText)
-            : Rejected(rawResponse.Issue);
+        if (!rawResponse.Success)
+        {
+            return Rejected(rawResponse.Issue);
+        }
+
+        var mappedResponse = MapRawModelOutput(rawResponse.RawText);
+        return RepairUntilResolved(
+            mappedResponse,
+            nextRepairAttempt: 1,
+            maxRepairAttempts: ModelPromptContract.MaxRepairAttempts);
     }
 
     public AiDrawingSpecResponse RepairDrawingSpec(AiDrawingSpecRepairRequest request)
@@ -113,9 +120,58 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
         var rawResponse = ExecuteModelCall(
             options => _modelClient.RepairDrawingSpec(request, options));
 
-        return rawResponse.Success
-            ? MapRawModelOutput(rawResponse.RawText)
-            : Rejected(rawResponse.Issue);
+        if (!rawResponse.Success)
+        {
+            return Rejected(rawResponse.Issue);
+        }
+
+        var mappedResponse = MapRawModelOutput(rawResponse.RawText);
+        return RepairUntilResolved(
+            mappedResponse,
+            nextRepairAttempt: request.RepairAttempt + 1,
+            maxRepairAttempts: request.MaxRepairAttempts);
+    }
+
+    private AiDrawingSpecResponse RepairUntilResolved(
+        AiDrawingSpecResponse mappedResponse,
+        int nextRepairAttempt,
+        int maxRepairAttempts)
+    {
+        var currentResponse = mappedResponse;
+        var repairAttempt = nextRepairAttempt;
+
+        while (CanRepair(currentResponse))
+        {
+            if (repairAttempt > maxRepairAttempts)
+            {
+                return RejectedRepairAttemptLimitExceeded(
+                    currentResponse,
+                    repairAttempt,
+                    maxRepairAttempts);
+            }
+
+            var repairRequest = new AiDrawingSpecRepairRequest
+            {
+                InvalidDrawingSpecJson = currentResponse.DrawingSpecJson,
+                Issues = currentResponse.Issues,
+                RepairAttempt = repairAttempt,
+                MaxRepairAttempts = maxRepairAttempts,
+                RepairStrategy = AiRepairStrategy.RepairDrawingSpecOnly
+            };
+
+            var rawRepairResponse = ExecuteModelCall(
+                options => _modelClient.RepairDrawingSpec(repairRequest, options));
+
+            if (!rawRepairResponse.Success)
+            {
+                return Rejected(rawRepairResponse.Issue);
+            }
+
+            currentResponse = MapRawModelOutput(rawRepairResponse.RawText);
+            repairAttempt++;
+        }
+
+        return currentResponse;
     }
 
     private ModelCallResult ExecuteModelCall(Func<AiModelCallOptions, string> call)
@@ -288,6 +344,13 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
             .ToArray();
     }
 
+    private static bool CanRepair(AiDrawingSpecResponse response)
+    {
+        return response.Kind == AiDrawingSpecResponseKind.Rejected
+            && response.Issues.Count > 0
+            && response.Issues.All(issue => issue.Repairable);
+    }
+
     private static AiDrawingSpecResponse Rejected(AiModelIssue issue)
     {
         return new AiDrawingSpecResponse
@@ -314,6 +377,35 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
             DrawingSpecJson = drawingSpecJson,
             Validation = validation,
             Issues = issues.ToArray()
+        };
+    }
+
+    private static AiDrawingSpecResponse RejectedRepairAttemptLimitExceeded(
+        AiDrawingSpecResponse lastResponse,
+        int repairAttempt,
+        int maxRepairAttempts)
+    {
+        var issue = new AiModelIssue(
+            AiIssueCodes.RepairAttemptLimitExceeded,
+            "$.repairAttempt",
+            $"Repair attempt {repairAttempt} exceeds the configured limit of {maxRepairAttempts}.",
+            ValidationSeverity.Error,
+            AiModelIssueSource.Service,
+            repairable: false);
+        var validationIssue = new ValidationIssue(
+            issue.Code,
+            issue.Path,
+            issue.Message,
+            issue.Severity);
+
+        return new AiDrawingSpecResponse
+        {
+            Kind = AiDrawingSpecResponseKind.Rejected,
+            Spec = lastResponse.Spec,
+            DrawingSpecJson = lastResponse.DrawingSpecJson,
+            Clarifications = lastResponse.Clarifications,
+            Validation = ValidationResult.Failure(lastResponse.Validation.Issues.Concat(new[] { validationIssue })),
+            Issues = lastResponse.Issues.Concat(new[] { issue }).ToArray()
         };
     }
 

@@ -19,6 +19,7 @@ public static class Program
         {
             ("Core uses the locked MVP domain", CoreUsesLockedMvpDomain),
             ("AI request defaults to P4 model prompt contract", AiRequestDefaultsToP4ModelPromptContract),
+            ("AI repair request excludes original request payload", AiRepairRequestExcludesOriginalRequestPayload),
             ("Local AI adapter accepts JSON-only DrawingSpec responses", LocalAiAdapterAcceptsJsonOnlyDrawingSpecResponses),
             ("Local AI adapter rejects non-JSON model responses", LocalAiAdapterRejectsNonJsonModelResponses),
             ("Local AI adapter rejects Markdown fenced model responses", LocalAiAdapterRejectsMarkdownFencedModelResponses),
@@ -31,6 +32,12 @@ public static class Program
             ("Local AI adapter maps service failures as non-repairable", LocalAiAdapterMapsServiceFailuresAsNonRepairable),
             ("Local AI adapter enforces repair attempt limit", LocalAiAdapterEnforcesRepairAttemptLimit),
             ("Local AI adapter rejects invalid repair attempt numbers", LocalAiAdapterRejectsInvalidRepairAttemptNumbers),
+            ("Local AI adapter repairs first schema invalid response", LocalAiAdapterRepairsFirstSchemaInvalidResponse),
+            ("Local AI adapter repairs first business invalid response", LocalAiAdapterRepairsFirstBusinessInvalidResponse),
+            ("Local AI adapter rejects after bounded repair failures", LocalAiAdapterRejectsAfterBoundedRepairFailures),
+            ("Local AI adapter continues explicit repair within attempt limit", LocalAiAdapterContinuesExplicitRepairWithinAttemptLimit),
+            ("Local AI adapter does not repair clarification responses", LocalAiAdapterDoesNotRepairClarificationResponses),
+            ("Local AI adapter never repairs unsafe command responses", LocalAiAdapterNeverRepairsUnsafeCommandResponses),
             ("Fixed rectangular plate sample matches P1-03 geometry", FixedRectangularPlateSampleMatchesP103Geometry),
             ("DrawingSpec schema accepts valid example files", DrawingSpecSchemaAcceptsValidExampleFiles),
             ("Basic entities combo example validates and plans P3-01 entities", BasicEntitiesComboExampleValidatesAndPlansP301Entities),
@@ -121,7 +128,6 @@ public static class Program
 
         var repairRequest = new AiDrawingSpecRepairRequest
         {
-            OriginalRequest = request,
             InvalidDrawingSpecJson = "{\"entities\":[]}",
             Issues = new[] { modelIssue }
         };
@@ -130,6 +136,21 @@ public static class Program
         AssertEqual(1, repairRequest.RepairAttempt);
         AssertEqual(ModelPromptContract.MaxRepairAttempts, repairRequest.MaxRepairAttempts);
         AssertEqual(1, repairRequest.Issues.Count);
+    }
+
+    private static void AiRepairRequestExcludesOriginalRequestPayload()
+    {
+        var propertyNames = typeof(AiDrawingSpecRepairRequest)
+            .GetProperties()
+            .Select(property => property.Name)
+            .ToArray();
+
+        Assert(!propertyNames.Contains("OriginalRequest"), "Repair requests must not carry the original user request or future drawing context payload.");
+        Assert(propertyNames.Contains("InvalidDrawingSpecJson"), "Repair requests must carry the previous invalid DrawingSpec JSON.");
+        Assert(propertyNames.Contains("Issues"), "Repair requests must carry mapped validation issues.");
+        Assert(propertyNames.Contains("RepairAttempt"), "Repair requests must carry the bounded attempt number.");
+        Assert(propertyNames.Contains("MaxRepairAttempts"), "Repair requests must carry the configured attempt limit.");
+        Assert(propertyNames.Contains("RepairStrategy"), "Repair requests must carry the DrawingSpec-only repair strategy.");
     }
 
     private static void LocalAiAdapterAcceptsJsonOnlyDrawingSpecResponses()
@@ -419,6 +440,261 @@ public static class Program
                 && issue.Source == AiModelIssueSource.Service
                 && !issue.Repairable),
             $"Invalid repair attempt numbers must return a stable service issue without calling the model: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterRepairsFirstSchemaInvalidResponse()
+    {
+        var invalidJson = MinimalSpecJson("""
+            {
+              "id": "schema-repair-target",
+              "type": "line",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        var repairedJson = MinimalSpecJson("""
+            {
+              "id": "schema-repaired-line",
+              "type": "line",
+              "layer": "OUTLINE",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        var modelClient = new SequenceAiModelClient(
+            new[] { invalidJson },
+            new[] { repairedJson });
+        var adapter = new LocalAiDrawingSpecAdapter(modelClient);
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-schema-repair" });
+
+        AssertEqual(AiDrawingSpecResponseKind.DrawingSpec, response.Kind);
+        AssertEqual(1, modelClient.DrawingSpecCalls);
+        AssertEqual(1, modelClient.RepairCalls);
+        AssertEqual(1, modelClient.RepairRequests.Count);
+        AssertEqual(1, modelClient.RepairRequests[0].RepairAttempt);
+        AssertEqual(ModelPromptContract.MaxRepairAttempts, modelClient.RepairRequests[0].MaxRepairAttempts);
+        AssertEqual(AiRepairStrategy.RepairDrawingSpecOnly, modelClient.RepairRequests[0].RepairStrategy);
+        AssertEqual(invalidJson, modelClient.RepairRequests[0].InvalidDrawingSpecJson);
+        Assert(
+            modelClient.RepairRequests[0].Issues.Any(issue => issue.Code == "missing_required"
+                && issue.Path == "$.entities[0].layer"
+                && issue.Source == AiModelIssueSource.SchemaValidation
+                && issue.Repairable),
+            $"Schema repair request must carry mapped issue paths: {FormatModelIssues(modelClient.RepairRequests[0].Issues)}");
+        AssertEqual(repairedJson, response.DrawingSpecJson);
+        AssertEqual("schema-repaired-line", response.Spec!.Entities.Single().Id);
+    }
+
+    private static void LocalAiAdapterRepairsFirstBusinessInvalidResponse()
+    {
+        var invalidJson = BusinessInvalidSpecJson("business-repair-target");
+        var repairedJson = MinimalSpecJson("""
+            {
+              "id": "business-repaired-line",
+              "type": "line",
+              "layer": "OUTLINE",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        var modelClient = new SequenceAiModelClient(
+            new[] { invalidJson },
+            new[] { repairedJson });
+        var adapter = new LocalAiDrawingSpecAdapter(modelClient);
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-business-repair" });
+
+        AssertEqual(AiDrawingSpecResponseKind.DrawingSpec, response.Kind);
+        AssertEqual(1, modelClient.DrawingSpecCalls);
+        AssertEqual(1, modelClient.RepairCalls);
+        AssertEqual(1, modelClient.RepairRequests.Count);
+        AssertEqual(1, modelClient.RepairRequests[0].RepairAttempt);
+        AssertEqual(ModelPromptContract.MaxRepairAttempts, modelClient.RepairRequests[0].MaxRepairAttempts);
+        AssertEqual(AiRepairStrategy.RepairDrawingSpecOnly, modelClient.RepairRequests[0].RepairStrategy);
+        AssertEqual(invalidJson, modelClient.RepairRequests[0].InvalidDrawingSpecJson);
+        Assert(
+            modelClient.RepairRequests[0].Issues.Any(issue => issue.Code == "missing_required_layer"
+                && issue.Path == "$.layers[CENTER]"
+                && issue.Source == AiModelIssueSource.BusinessValidation
+                && issue.Repairable),
+            $"Business repair request must carry mapped issue paths: {FormatModelIssues(modelClient.RepairRequests[0].Issues)}");
+        AssertEqual(repairedJson, response.DrawingSpecJson);
+        AssertEqual("business-repaired-line", response.Spec!.Entities.Single().Id);
+    }
+
+    private static void LocalAiAdapterRejectsAfterBoundedRepairFailures()
+    {
+        var initialInvalidJson = MinimalSpecJson("""
+            {
+              "id": "initial-invalid-line",
+              "type": "line",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        var firstRepairInvalidJson = MinimalSpecJson("""
+            {
+              "id": "first-repair-invalid-line",
+              "type": "line",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        var secondRepairInvalidJson = MinimalSpecJson("""
+            {
+              "id": "second-repair-invalid-line",
+              "type": "line",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        var modelClient = new SequenceAiModelClient(
+            new[] { initialInvalidJson },
+            new[] { firstRepairInvalidJson, secondRepairInvalidJson });
+        var adapter = new LocalAiDrawingSpecAdapter(modelClient);
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-repair-limit" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        AssertEqual(1, modelClient.DrawingSpecCalls);
+        AssertEqual(ModelPromptContract.MaxRepairAttempts, modelClient.RepairCalls);
+        AssertEqual(ModelPromptContract.MaxRepairAttempts, modelClient.RepairRequests.Count);
+        AssertEqual(1, modelClient.RepairRequests[0].RepairAttempt);
+        AssertEqual(2, modelClient.RepairRequests[1].RepairAttempt);
+        AssertEqual(secondRepairInvalidJson, response.DrawingSpecJson);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.RepairAttemptLimitExceeded
+                && issue.Source == AiModelIssueSource.Service
+                && !issue.Repairable),
+            $"Bounded repair failures must end with repair_attempt_limit_exceeded: {FormatModelIssues(response.Issues)}");
+        Assert(
+            response.Issues.Any(issue => issue.Code == "missing_required"
+                && issue.Path == "$.entities[0].layer"
+                && issue.Source == AiModelIssueSource.SchemaValidation),
+            $"Final rejection should preserve the last mapped validation issue for user explanation: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterContinuesExplicitRepairWithinAttemptLimit()
+    {
+        var firstRepairInvalidJson = MinimalSpecJson("""
+            {
+              "id": "explicit-first-invalid-line",
+              "type": "line",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        var secondRepairInvalidJson = MinimalSpecJson("""
+            {
+              "id": "explicit-second-invalid-line",
+              "type": "line",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        var startingIssue = new AiModelIssue(
+            "missing_required",
+            "$.entities[0].layer",
+            "Property 'layer' is required.",
+            ValidationSeverity.Error,
+            AiModelIssueSource.SchemaValidation,
+            repairable: true);
+        var modelClient = new SequenceAiModelClient(
+            Array.Empty<string>(),
+            new[] { firstRepairInvalidJson, secondRepairInvalidJson });
+        var adapter = new LocalAiDrawingSpecAdapter(modelClient);
+
+        var response = adapter.RepairDrawingSpec(new AiDrawingSpecRepairRequest
+        {
+            InvalidDrawingSpecJson = "{\"entities\":[]}",
+            Issues = new[] { startingIssue },
+            RepairAttempt = 1,
+            MaxRepairAttempts = 2
+        });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        AssertEqual(0, modelClient.DrawingSpecCalls);
+        AssertEqual(2, modelClient.RepairCalls);
+        AssertEqual(2, modelClient.RepairRequests.Count);
+        AssertEqual(1, modelClient.RepairRequests[0].RepairAttempt);
+        AssertEqual(2, modelClient.RepairRequests[1].RepairAttempt);
+        AssertEqual(firstRepairInvalidJson, modelClient.RepairRequests[1].InvalidDrawingSpecJson);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.RepairAttemptLimitExceeded
+                && issue.Source == AiModelIssueSource.Service
+                && !issue.Repairable),
+            $"Explicit repair continuation must stop at the configured limit: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterDoesNotRepairClarificationResponses()
+    {
+        var clarificationJson = """
+            {
+              "drawingSpecVersion": "1.0",
+              "units": "mm",
+              "metadata": {
+                "title": "clarification repair gate test",
+                "domain": "mechanical_plate",
+                "createdBy": "test",
+                "requestId": "adapter-clarification-no-repair"
+              },
+              "layers": [
+                { "name": "OUTLINE", "color": 7, "lineType": "Continuous", "lineWeight": 0.35 }
+              ],
+              "entities": [],
+              "dimensions": [],
+              "clarifications": [
+                "Please provide the plate width."
+              ]
+            }
+            """;
+        var modelClient = new SequenceAiModelClient(
+            new[] { clarificationJson },
+            new[] { MinimalSpecJson("""
+                {
+                  "id": "should-not-repair-clarification",
+                  "type": "line",
+                  "layer": "OUTLINE",
+                  "start": [0, 0],
+                  "end": [100, 0]
+                }
+                """) });
+        var adapter = new LocalAiDrawingSpecAdapter(modelClient);
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-clarification-no-repair" });
+
+        AssertEqual(AiDrawingSpecResponseKind.NeedsClarification, response.Kind);
+        AssertEqual(1, modelClient.DrawingSpecCalls);
+        AssertEqual(0, modelClient.RepairCalls);
+        AssertEqual(1, response.Clarifications.Count);
+    }
+
+    private static void LocalAiAdapterNeverRepairsUnsafeCommandResponses()
+    {
+        var modelClient = new SequenceAiModelClient(
+            new[] { "(command \"LINE\" \"0,0\" \"100,0\" \"\")" },
+            new[] { MinimalSpecJson("""
+                {
+                  "id": "should-not-repair-unsafe",
+                  "type": "line",
+                  "layer": "OUTLINE",
+                  "start": [0, 0],
+                  "end": [100, 0]
+                }
+                """) });
+        var adapter = new LocalAiDrawingSpecAdapter(modelClient);
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-unsafe-no-repair" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        AssertEqual(1, modelClient.DrawingSpecCalls);
+        AssertEqual(0, modelClient.RepairCalls);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.UnsafeCadCommand
+                && issue.Source == AiModelIssueSource.ModelResponse
+                && !issue.Repairable),
+            $"Unsafe command output must remain outside the repair loop: {FormatModelIssues(response.Issues)}");
     }
 
     private static void FixedRectangularPlateSampleMatchesP103Geometry()
@@ -1930,6 +2206,36 @@ public static class Program
         """;
     }
 
+    private static string BusinessInvalidSpecJson(string entityId)
+    {
+        return $$"""
+        {
+          "drawingSpecVersion": "1.0",
+          "units": "mm",
+          "metadata": {
+            "title": "business repair test",
+            "domain": "mechanical_plate",
+            "createdBy": "test",
+            "requestId": "business-repair-test"
+          },
+          "layers": [
+            { "name": "OUTLINE", "color": 7, "lineType": "Continuous", "lineWeight": 0.35 }
+          ],
+          "entities": [
+            {
+              "id": "{{entityId}}",
+              "type": "line",
+              "layer": "OUTLINE",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+          ],
+          "dimensions": [],
+          "clarifications": []
+        }
+        """;
+    }
+
     private static string FormatIssues(IEnumerable<ValidationIssue> issues)
     {
         return string.Join(
@@ -1976,6 +2282,48 @@ public static class Program
         {
             RepairCalls++;
             return _rawResponse;
+        }
+    }
+
+    private sealed class SequenceAiModelClient : IAiModelClient
+    {
+        private readonly Queue<string> _drawingSpecResponses;
+        private readonly Queue<string> _repairResponses;
+        private readonly List<AiDrawingSpecRepairRequest> _repairRequests = new List<AiDrawingSpecRepairRequest>();
+
+        public SequenceAiModelClient(IEnumerable<string> drawingSpecResponses, IEnumerable<string> repairResponses)
+        {
+            _drawingSpecResponses = new Queue<string>(drawingSpecResponses);
+            _repairResponses = new Queue<string>(repairResponses);
+        }
+
+        public int DrawingSpecCalls { get; private set; }
+
+        public int RepairCalls { get; private set; }
+
+        public IReadOnlyList<AiDrawingSpecRepairRequest> RepairRequests => _repairRequests;
+
+        public string CreateDrawingSpec(AiDrawingSpecRequest request, AiModelCallOptions options)
+        {
+            DrawingSpecCalls++;
+            if (_drawingSpecResponses.Count == 0)
+            {
+                throw new InvalidOperationException("No drawing spec response configured for sequence model client.");
+            }
+
+            return _drawingSpecResponses.Dequeue();
+        }
+
+        public string RepairDrawingSpec(AiDrawingSpecRepairRequest request, AiModelCallOptions options)
+        {
+            RepairCalls++;
+            _repairRequests.Add(request);
+            if (_repairResponses.Count == 0)
+            {
+                throw new InvalidOperationException("No repair response configured for sequence model client.");
+            }
+
+            return _repairResponses.Dequeue();
         }
     }
 

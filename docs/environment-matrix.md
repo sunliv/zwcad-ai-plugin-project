@@ -224,6 +224,22 @@ Implemented and build/test verified against the local source baseline:
 - Automated verification: `dotnet .\src\ZwcadAi.Tests\bin\x64\Debug\net8.0\ZwcadAi.Tests.dll` passed 56 tests.
 - Build verification: `dotnet build src\ZwcadAi.Tests\ZwcadAi.Tests.csproj -p:Platform=x64 -t:Rebuild` passed with 0 warnings and 0 errors.
 
+## P4-03 Spec Repair Loop Evidence
+
+Date: 2026-04-28
+
+Implemented and build/test verified against the local source baseline:
+
+- Extended `LocalAiDrawingSpecAdapter` from a single repair attempt guard into a bounded repair loop shared by initial generation and explicit repair calls.
+- The loop order is raw model output -> JSON-only gate -> schema validation -> clarification gate -> business validation -> mapped `AiModelIssue` list -> bounded DrawingSpec-only repair -> final `Rejected`.
+- Schema validation failures and business validation failures now create repair requests containing the previous invalid DrawingSpec JSON plus stable issue codes and paths.
+- The loop is bounded by `ModelPromptContract.MaxRepairAttempts` and returns `repair_attempt_limit_exceeded` while preserving the latest mapped validation issues for user-facing explanation.
+- Clarification responses return `NeedsClarification` without repair; unsafe CAD command output remains non-repairable and never enters the repair loop.
+- The AI request boundary still follows the P4-02 data-only contract: initial generation receives user intent plus deterministic request metadata, while repair receives only invalid DrawingSpec JSON and mapped issues; full DWG content is not included.
+- Real HTTP/local-model provider integration remains a P4-04 or separate provider task: `IAiModelClient` implementations still need timeout, retry, cancellation, API-key environment loading, and log redaction hardening.
+- Automated verification: `dotnet run --project src\ZwcadAi.Tests\ZwcadAi.Tests.csproj --property:Platform=x64` passed 63 tests.
+- Build verification: `dotnet build ZwcadAi.sln -p:Platform=x64` passed with 0 warnings and 0 errors.
+
 ## Open Environment Gaps
 
 - ZWCAD 2026 and Windows 10 compatibility validation remain pending for later compatibility work.
