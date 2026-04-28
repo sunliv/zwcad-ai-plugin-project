@@ -2,8 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Xml.Linq;
 using ZwcadAi.AiService;
 using ZwcadAi.Core;
@@ -30,6 +33,13 @@ public static class Program
             ("Local AI adapter maps business validation issues as repairable", LocalAiAdapterMapsBusinessValidationIssuesAsRepairable),
             ("Local AI adapter maps timeout failures as non-repairable", LocalAiAdapterMapsTimeoutFailuresAsNonRepairable),
             ("Local AI adapter maps service failures as non-repairable", LocalAiAdapterMapsServiceFailuresAsNonRepairable),
+            ("Local AI adapter maps cancellation failures as non-repairable", LocalAiAdapterMapsCancellationFailuresAsNonRepairable),
+            ("HTTP AI model client posts create requests with env API key", HttpAiModelClientPostsCreateRequestsWithEnvApiKey),
+            ("HTTP AI model client posts repair requests without original context", HttpAiModelClientPostsRepairRequestsWithoutOriginalContext),
+            ("HTTP AI model client timeout failures retry through adapter", HttpAiModelClientTimeoutFailuresRetryThroughAdapter),
+            ("HTTP AI model client cancellation failures do not retry", HttpAiModelClientCancellationFailuresDoNotRetry),
+            ("HTTP AI model client non-success failures stay redacted", HttpAiModelClientNonSuccessFailuresStayRedacted),
+            ("HTTP AI model client rejects missing API key environment variable", HttpAiModelClientRejectsMissingApiKeyEnvironmentVariable),
             ("Local AI adapter enforces repair attempt limit", LocalAiAdapterEnforcesRepairAttemptLimit),
             ("Local AI adapter rejects invalid repair attempt numbers", LocalAiAdapterRejectsInvalidRepairAttemptNumbers),
             ("Local AI adapter repairs first schema invalid response", LocalAiAdapterRepairsFirstSchemaInvalidResponse),
@@ -378,6 +388,316 @@ public static class Program
                 && issue.Source == AiModelIssueSource.Service
                 && !issue.Repairable),
             $"Service failure must be a non-repairable service issue: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterMapsCancellationFailuresAsNonRepairable()
+    {
+        var modelClient = new ThrowingAiModelClient(new OperationCanceledException("user canceled"));
+        var adapter = new LocalAiDrawingSpecAdapter(
+            modelClient,
+            new LocalAiServiceOptions { MaxRetries = 2 });
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-canceled" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        AssertEqual(1, modelClient.DrawingSpecCalls);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.ModelServiceCanceled
+                && issue.Source == AiModelIssueSource.Service
+                && !issue.Repairable),
+            $"Service cancellation must be a non-repairable service issue without retry: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void HttpAiModelClientPostsCreateRequestsWithEnvApiKey()
+    {
+        const string apiKeyEnv = "ZWCAD_AI_TEST_API_KEY";
+        const string apiKey = "test-secret-token";
+        var responseJson = MinimalSpecJson("""
+            {
+              "id": "http-create-line",
+              "type": "line",
+              "layer": "OUTLINE",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        string? capturedBody = null;
+        HttpRequestMessage? capturedRequest = null;
+        var previousApiKey = Environment.GetEnvironmentVariable(apiKeyEnv);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(apiKeyEnv, apiKey);
+            var client = new HttpAiModelClient(new HttpClient(new CapturingHttpMessageHandler(request =>
+            {
+                capturedRequest = request;
+                capturedBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(responseJson)
+                };
+            })));
+
+            var raw = client.CreateDrawingSpec(
+                new AiDrawingSpecRequest
+                {
+                    RequestId = "http-create",
+                    UserRequest = "画一个100x60矩形板"
+                },
+                new AiModelCallOptions
+                {
+                    ServiceEndpoint = "https://model-gateway.example.test/drawing-spec",
+                    ApiKeyEnvironmentVariable = apiKeyEnv,
+                    Timeout = TimeSpan.FromSeconds(5)
+                });
+
+            AssertEqual(responseJson, raw);
+            Assert(capturedRequest != null, "HTTP provider must send a request.");
+            AssertEqual(HttpMethod.Post, capturedRequest!.Method);
+            AssertEqual("https://model-gateway.example.test/drawing-spec", capturedRequest.RequestUri!.ToString());
+            AssertEqual("Bearer", capturedRequest.Headers.Authorization!.Scheme);
+            AssertEqual(apiKey, capturedRequest.Headers.Authorization.Parameter);
+            Assert(capturedBody != null, "HTTP provider must serialize a JSON body.");
+            Assert(!capturedBody!.Contains(apiKey), "Serialized model requests must not include the API key value in the body.");
+
+            using var body = JsonDocument.Parse(capturedBody);
+            var root = body.RootElement;
+            AssertEqual("createDrawingSpec", root.GetProperty("operation").GetString());
+            AssertEqual("http-create", root.GetProperty("requestId").GetString());
+            AssertEqual(ModelPromptContract.PromptVersion, root.GetProperty("promptVersion").GetString());
+            AssertEqual("画一个100x60矩形板", root.GetProperty("userRequest").GetString());
+            AssertEqual("mm", root.GetProperty("context").GetProperty("units").GetString());
+            AssertEqual(DrawingDomain.MechanicalPlate, root.GetProperty("context").GetProperty("domain").GetString());
+            AssertEqual(DrawingSpecWireFormat.Version, root.GetProperty("context").GetProperty("drawingSpecVersion").GetString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(apiKeyEnv, previousApiKey);
+        }
+    }
+
+    private static void HttpAiModelClientPostsRepairRequestsWithoutOriginalContext()
+    {
+        var invalidJson = MinimalSpecJson("""
+            {
+              "id": "http-repair-missing-layer",
+              "type": "line",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        var repairedJson = MinimalSpecJson("""
+            {
+              "id": "http-repaired-line",
+              "type": "line",
+              "layer": "OUTLINE",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        string? capturedBody = null;
+        var client = new HttpAiModelClient(new HttpClient(new CapturingHttpMessageHandler(request =>
+        {
+            capturedBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(repairedJson)
+            };
+        })));
+
+        var raw = client.RepairDrawingSpec(
+            new AiDrawingSpecRepairRequest
+            {
+                InvalidDrawingSpecJson = invalidJson,
+                RepairAttempt = 2,
+                MaxRepairAttempts = 2,
+                Issues = new[]
+                {
+                    new AiModelIssue(
+                        "missing_required",
+                        "$.entities[0].layer",
+                        "Property 'layer' is required.",
+                        ValidationSeverity.Error,
+                        AiModelIssueSource.SchemaValidation,
+                        repairable: true)
+                }
+            },
+            new AiModelCallOptions
+            {
+                ServiceEndpoint = "http://localhost:3210/repair",
+                Timeout = TimeSpan.FromSeconds(5)
+            });
+
+        AssertEqual(repairedJson, raw);
+        Assert(capturedBody != null, "HTTP repair provider must serialize a JSON body.");
+        Assert(!capturedBody!.Contains("userRequest"), "Repair requests must not include the original natural language request.");
+        Assert(!capturedBody.Contains("originalRequest"), "Repair requests must not include original request aliases.");
+        Assert(!capturedBody.Contains("dwg", StringComparison.OrdinalIgnoreCase), "Repair requests must not include DWG context.");
+        Assert(!capturedBody.Contains("screenshot", StringComparison.OrdinalIgnoreCase), "Repair requests must not include screenshots.");
+        Assert(!capturedBody.Contains("pluginContext", StringComparison.Ordinal), "Repair requests must not include plugin context.");
+
+        using var body = JsonDocument.Parse(capturedBody);
+        var root = body.RootElement;
+        AssertSequenceEqual(
+            new[]
+            {
+                "invalidDrawingSpecJson",
+                "issues",
+                "maxRepairAttempts",
+                "operation",
+                "promptVersion",
+                "repairAttempt",
+                "repairStrategy"
+            },
+            root.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        AssertEqual("repairDrawingSpec", root.GetProperty("operation").GetString());
+        AssertEqual(ModelPromptContract.PromptVersion, root.GetProperty("promptVersion").GetString());
+        AssertEqual(invalidJson, root.GetProperty("invalidDrawingSpecJson").GetString());
+        AssertEqual(2, root.GetProperty("repairAttempt").GetInt32());
+        AssertEqual(2, root.GetProperty("maxRepairAttempts").GetInt32());
+        var issue = root.GetProperty("issues")[0];
+        AssertSequenceEqual(
+            new[] { "code", "message", "path", "repairable", "severity", "source" },
+            issue.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        AssertEqual("missing_required", issue.GetProperty("code").GetString());
+        AssertEqual("$.entities[0].layer", issue.GetProperty("path").GetString());
+        AssertEqual("SchemaValidation", issue.GetProperty("source").GetString());
+    }
+
+    private static void HttpAiModelClientTimeoutFailuresRetryThroughAdapter()
+    {
+        var handler = new CapturingHttpMessageHandler(async (_, cancellationToken) =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}")
+            };
+        });
+        var adapter = new LocalAiDrawingSpecAdapter(
+            new HttpAiModelClient(new HttpClient(handler)),
+            new LocalAiServiceOptions
+            {
+                ServiceEndpoint = "http://localhost:3210/timeout",
+                Timeout = TimeSpan.FromMilliseconds(10),
+                MaxRetries = 2
+            });
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "http-timeout" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        AssertEqual(3, handler.Calls);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.ModelServiceTimeout
+                && issue.Source == AiModelIssueSource.Service
+                && !issue.Repairable),
+            $"HTTP timeouts must retry and end as a stable service issue: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void HttpAiModelClientCancellationFailuresDoNotRetry()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var handler = new CapturingHttpMessageHandler(async (_, cancellationToken) =>
+        {
+            cancellation.Cancel();
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}")
+            };
+        });
+        var adapter = new LocalAiDrawingSpecAdapter(
+            new HttpAiModelClient(new HttpClient(handler)),
+            new LocalAiServiceOptions
+            {
+                ServiceEndpoint = "http://localhost:3210/cancel",
+                Timeout = TimeSpan.FromSeconds(5),
+                MaxRetries = 2,
+                CancellationToken = cancellation.Token
+            });
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "http-canceled" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        AssertEqual(1, handler.Calls);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.ModelServiceCanceled
+                && issue.Source == AiModelIssueSource.Service
+                && !issue.Repairable),
+            $"HTTP cancellation must not retry and must end as a stable service issue: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void HttpAiModelClientNonSuccessFailuresStayRedacted()
+    {
+        var providerControlledReason = "leaked userRequest=draw-secret-plate token=abc123";
+        var handler = new CapturingHttpMessageHandler(_ =>
+        {
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                ReasonPhrase = providerControlledReason,
+                Content = new StringContent("provider body should not be surfaced")
+            };
+        });
+        var adapter = new LocalAiDrawingSpecAdapter(
+            new HttpAiModelClient(new HttpClient(handler)),
+            new LocalAiServiceOptions
+            {
+                ServiceEndpoint = "http://localhost:3210/fail",
+                Timeout = TimeSpan.FromSeconds(5),
+                MaxRetries = 2
+            });
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "http-500" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        AssertEqual(1, handler.Calls);
+        var serviceIssue = response.Issues.Single(issue => issue.Code == AiIssueCodes.ModelServiceFailed);
+        AssertEqual(AiModelIssueSource.Service, serviceIssue.Source);
+        Assert(!serviceIssue.Repairable, "HTTP non-success failure must not enter the DrawingSpec repair loop.");
+        AssertEqual("Model service failed before returning DrawingSpec JSON.", serviceIssue.Message);
+        Assert(
+            serviceIssue.Message.IndexOf(providerControlledReason, StringComparison.Ordinal) < 0,
+            "Service issue messages must not surface provider-controlled HTTP reason phrases.");
+    }
+
+    private static void HttpAiModelClientRejectsMissingApiKeyEnvironmentVariable()
+    {
+        const string apiKeyEnv = "ZWCAD_AI_TEST_MISSING_API_KEY";
+        var previousApiKey = Environment.GetEnvironmentVariable(apiKeyEnv);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(apiKeyEnv, null);
+            var handler = new CapturingHttpMessageHandler(_ =>
+            {
+                throw new InvalidOperationException("HTTP should not be called when the API key is missing.");
+            });
+            var adapter = new LocalAiDrawingSpecAdapter(
+                new HttpAiModelClient(new HttpClient(handler)),
+                new LocalAiServiceOptions
+                {
+                    ServiceEndpoint = "http://localhost:3210/missing-key",
+                    ApiKeyEnvironmentVariable = apiKeyEnv,
+                    Timeout = TimeSpan.FromSeconds(5),
+                    MaxRetries = 2
+                });
+
+            var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "http-missing-key" });
+
+            AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+            AssertEqual(0, handler.Calls);
+            var serviceIssue = response.Issues.Single(issue => issue.Code == AiIssueCodes.ModelServiceFailed);
+            AssertEqual(AiModelIssueSource.Service, serviceIssue.Source);
+            Assert(!serviceIssue.Repairable, "Missing API key configuration must not enter the DrawingSpec repair loop.");
+            AssertEqual("Model service failed before returning DrawingSpec JSON.", serviceIssue.Message);
+            Assert(
+                serviceIssue.Message.IndexOf(apiKeyEnv, StringComparison.Ordinal) < 0,
+                "Service issue messages must not surface environment variable names or secret configuration detail.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(apiKeyEnv, previousApiKey);
+        }
     }
 
     private static void LocalAiAdapterEnforcesRepairAttemptLimit()
@@ -2350,6 +2670,29 @@ public static class Program
         {
             RepairCalls++;
             throw _exception;
+        }
+    }
+
+    private sealed class CapturingHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _respond;
+
+        public CapturingHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
+            : this((request, _) => Task.FromResult(respond(request)))
+        {
+        }
+
+        public CapturingHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond)
+        {
+            _respond = respond;
+        }
+
+        public int Calls { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return _respond(request, cancellationToken);
         }
     }
 }

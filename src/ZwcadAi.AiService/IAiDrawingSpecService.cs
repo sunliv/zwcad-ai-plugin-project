@@ -147,6 +147,7 @@ public static class AiIssueCodes
     public const string InvalidRepairAttempt = "invalid_repair_attempt";
     public const string RepairAttemptLimitExceeded = "repair_attempt_limit_exceeded";
     public const string ModelServiceTimeout = "model_service_timeout";
+    public const string ModelServiceCanceled = "model_service_canceled";
     public const string ModelServiceFailed = "model_service_failed";
 }
 

@@ -372,6 +372,79 @@ Acceptance Criteria:
 - 重试次数有限。
 - 修复失败时可向用户解释。
 
+### P4-04 Implement HTTP AI Model Provider
+
+Goal: 先接入一条真实 `IAiModelClient` 主线，通过 HTTP 调用本地模型服务或私有模型网关。
+
+Context Files:
+
+- `src/ZwcadAi.AiService/IAiDrawingSpecService.cs`
+- `src/ZwcadAi.AiService/LocalAiDrawingSpecAdapter.cs`
+- `docs/capability-contract.md`
+
+Deliverables:
+
+- HTTP `IAiModelClient` 实现。
+- 初始生成请求体。
+- DrawingSpec-only repair 请求体。
+- API key 环境变量读取。
+- timeout、retry、cancellation、HTTP/service failure 映射测试。
+
+Acceptance Criteria:
+
+- 只实现 HTTP/私有网关这一条 provider 主线，不同时铺开本地 SDK、云厂商 SDK 或多个 provider。
+- API key 只从配置指定的环境变量读取，不写死、不进入请求体。
+- 初始请求允许包含自然语言用户意图和确定性上下文。
+- repair 请求只包含 invalid DrawingSpec JSON、mapped issues、attempt 和 repair strategy，不回传完整用户请求、DWG、截图或插件上下文。
+- timeout、cancellation、provider/HTTP failure 最终稳定映射为 `AiModelIssueSource.Service` 的非 repairable issue。
+- adapter 的 bounded retry 仍由 `LocalAiDrawingSpecAdapter` 统一控制。
+
+### P4-05 Implement Clarification Follow-up Loop
+
+Goal: 在 P5 UI 前补齐缺参追问闭环，避免把用户补充回答送进 repair loop。
+
+Context Files:
+
+- `src/ZwcadAi.AiService/IAiDrawingSpecService.cs`
+- `src/ZwcadAi.AiService/LocalAiDrawingSpecAdapter.cs`
+- `docs/implementation-flows.md`
+
+Deliverables:
+
+- `NeedsClarification -> 用户回答 -> 新一轮 CreateDrawingSpec` 的服务层流程。
+- 澄清问题和用户回答的最小状态模型。
+- 防止 clarification 被误接入 `RepairDrawingSpec` 的测试。
+
+Acceptance Criteria:
+
+- 缺少关键工程参数时返回 `NeedsClarification`，不触发 repair。
+- 用户回答后发起新的 `CreateDrawingSpec` 请求，而不是调用 repair loop。
+- 新一轮 create 请求只携带必要的用户意图/回答和确定性上下文，不携带 DWG、截图或任意插件上下文。
+
+### P4-06 Implement Redacted AI Call Logging
+
+Goal: 单独实现 AI 调用日志脱敏，默认不记录完整用户需求和 DrawingSpec 全文。
+
+Context Files:
+
+- `docs/capability-contract.md`
+- `src/ZwcadAi.AiService/LocalAiDrawingSpecAdapter.cs`
+- `src/ZwcadAi.AiService/HttpAiModelClient.cs`
+
+Deliverables:
+
+- AI 调用日志事件模型。
+- 默认脱敏日志 writer 或接口。
+- 明确的 opt-in 敏感内容记录开关。
+- 日志字段测试。
+
+Acceptance Criteria:
+
+- 默认只记录 request id、prompt version、response kind、issue code/path/source、耗时和 attempt 数。
+- 默认不记录完整用户需求、完整 DrawingSpec JSON、DWG、截图、API key 或任意插件上下文。
+- 即使开启敏感内容记录，也不能记录 API key。
+- 日志实现不改变 provider 请求边界和 repair loop 边界。
+
 ## Phase P5: Plugin UI
 
 ### P5-01 Build AI Drawing Panel

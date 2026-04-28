@@ -236,9 +236,28 @@ Implemented and build/test verified against the local source baseline:
 - The loop is bounded by `ModelPromptContract.MaxRepairAttempts` and returns `repair_attempt_limit_exceeded` while preserving the latest mapped validation issues for user-facing explanation.
 - Clarification responses return `NeedsClarification` without repair; unsafe CAD command output remains non-repairable and never enters the repair loop.
 - The AI request boundary still follows the P4-02 data-only contract: initial generation receives user intent plus deterministic request metadata, while repair receives only invalid DrawingSpec JSON and mapped issues; full DWG content is not included.
-- Real HTTP/local-model provider integration remains a P4-04 or separate provider task: `IAiModelClient` implementations still need timeout, retry, cancellation, API-key environment loading, and log redaction hardening.
+- Real provider integration is now split: P4-04 owns the HTTP/private-gateway `IAiModelClient` path, while log redaction hardening remains a separate P4-06 task.
 - Automated verification: `dotnet run --project src\ZwcadAi.Tests\ZwcadAi.Tests.csproj --property:Platform=x64` passed 63 tests.
 - Build verification: `dotnet build ZwcadAi.sln -p:Platform=x64` passed with 0 warnings and 0 errors.
+
+## P4-04 HTTP AI Model Provider Evidence
+
+Date: 2026-04-28
+
+Implemented and build/test verified against the local source baseline:
+
+- Added `HttpAiModelClient` as the first real `IAiModelClient` implementation; it uses one HTTP/private-gateway style provider path and leaves other provider families out of scope.
+- Create requests post `operation`, `requestId`, `promptVersion`, `userRequest`, and deterministic context fields for units, domain, allowed entity/dimension types, layer standard, DrawingSpec version, and max clarification questions.
+- Repair requests post only `operation`, `promptVersion`, `invalidDrawingSpecJson`, mapped `issues`, `repairAttempt`, `maxRepairAttempts`, and `repairStrategy`.
+- Repair request tests verify the body does not include original user request aliases, DWG content, screenshots, or plugin context.
+- API keys are read only through the configured environment variable name and sent as an `Authorization: Bearer` header; tests verify the key does not enter the JSON request body.
+- `AiModelCallOptions` and `LocalAiServiceOptions` now carry a cancellation token. HTTP timeout becomes `TimeoutException`; explicit cancellation becomes `model_service_canceled`; both map through `LocalAiDrawingSpecAdapter` to non-repairable `AiModelIssueSource.Service` issues.
+- Provider-controlled failure details stay redacted in user-facing service issues; non-2xx HTTP status and missing API-key configuration map to a stable generic service-failure message.
+- Bounded retry still belongs to `LocalAiDrawingSpecAdapter`, so provider failures remain outside the DrawingSpec repair loop.
+- P5 UI still needs the clarification follow-up loop: `NeedsClarification -> user answer -> new CreateDrawingSpec`, not repair.
+- Log redaction remains a separate P4-06 task: default logs should record request id, prompt version, response kind, issue code/path/source, elapsed time, and attempt count, not full user requests or full DrawingSpec JSON.
+- Automated verification: `dotnet .\src\ZwcadAi.Tests\bin\x64\Debug\net8.0\ZwcadAi.Tests.dll` passed 70 tests.
+- Build verification: `dotnet build src\ZwcadAi.Tests\ZwcadAi.Tests.csproj -p:Platform=x64` passed with 0 warnings and 0 errors.
 
 ## Open Environment Gaps
 

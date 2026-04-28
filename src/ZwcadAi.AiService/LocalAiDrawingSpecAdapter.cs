@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using ZwcadAi.Core;
 
 namespace ZwcadAi.AiService;
@@ -23,6 +24,8 @@ public sealed class AiModelCallOptions
     public string ApiKeyEnvironmentVariable { get; set; } = string.Empty;
 
     public bool LogSensitiveDrawingContent { get; set; }
+
+    public CancellationToken CancellationToken { get; set; } = CancellationToken.None;
 }
 
 public sealed class LocalAiServiceOptions
@@ -37,6 +40,8 @@ public sealed class LocalAiServiceOptions
 
     public bool LogSensitiveDrawingContent { get; set; }
 
+    public CancellationToken CancellationToken { get; set; } = CancellationToken.None;
+
     internal AiModelCallOptions ToCallOptions()
     {
         return new AiModelCallOptions
@@ -45,7 +50,8 @@ public sealed class LocalAiServiceOptions
             MaxRetries = Math.Max(0, MaxRetries),
             ServiceEndpoint = ServiceEndpoint ?? string.Empty,
             ApiKeyEnvironmentVariable = ApiKeyEnvironmentVariable ?? string.Empty,
-            LogSensitiveDrawingContent = LogSensitiveDrawingContent
+            LogSensitiveDrawingContent = LogSensitiveDrawingContent,
+            CancellationToken = CancellationToken
         };
     }
 }
@@ -190,6 +196,11 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
             {
                 lastFailure = exception;
             }
+            catch (OperationCanceledException exception)
+            {
+                lastFailure = exception;
+                break;
+            }
             catch (Exception exception)
             {
                 lastFailure = exception;
@@ -208,12 +219,21 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
                 repairable: false));
         }
 
+        if (lastFailure is OperationCanceledException)
+        {
+            return ModelCallResult.FromIssue(new AiModelIssue(
+                AiIssueCodes.ModelServiceCanceled,
+                "$.service",
+                "Model service call was canceled before returning DrawingSpec JSON.",
+                ValidationSeverity.Error,
+                AiModelIssueSource.Service,
+                repairable: false));
+        }
+
         return ModelCallResult.FromIssue(new AiModelIssue(
             AiIssueCodes.ModelServiceFailed,
             "$.service",
-            lastFailure == null
-                ? "Model service failed before returning DrawingSpec JSON."
-                : $"Model service failed before returning DrawingSpec JSON: {lastFailure.Message}",
+            "Model service failed before returning DrawingSpec JSON.",
             ValidationSeverity.Error,
             AiModelIssueSource.Service,
             repairable: false));
