@@ -74,6 +74,8 @@ public sealed class PlannedEntity
     public double Height { get; set; }
 
     public double Rotation { get; set; }
+
+    public string TextStyleName { get; set; } = string.Empty;
 }
 
 public sealed class PlannedDimension
@@ -107,6 +109,8 @@ public sealed class PlannedDimension
     public DrawingPoint? Offset { get; set; }
 
     public string Text { get; set; } = string.Empty;
+
+    public string DimensionStyleName { get; set; } = string.Empty;
 }
 
 public enum PlannedEntityKind
@@ -210,7 +214,8 @@ public sealed class DrawingSpecPlanRenderer : IRenderer
                 Center = dimension.Center,
                 TargetEntityId = dimension.TargetEntityId,
                 Offset = dimension.Offset,
-                Text = dimension.Text
+                Text = dimension.Text,
+                DimensionStyleName = CadDimensionStyleStandards.ResolveForDimensionType(dimension.Type).Name
             })
             .ToArray();
 
@@ -226,7 +231,11 @@ public sealed class DrawingSpecPlanRenderer : IRenderer
         var plan = CreatePlan(spec);
         if (!plan.Validation.IsValid)
         {
-            return new RenderResult(false, Array.Empty<RenderedEntity>(), plan.Validation);
+            return new RenderResult(
+                RenderStatus.Failed,
+                Array.Empty<RenderedEntity>(),
+                plan.Validation,
+                GeometrySummary.FromPlan(plan, RenderStatus.Failed, Array.Empty<RenderedEntity>(), plan.Validation));
         }
 
         var renderedEntities = plan.Entities
@@ -234,7 +243,11 @@ public sealed class DrawingSpecPlanRenderer : IRenderer
             .Concat(plan.Dimensions.Select(dimension => new RenderedEntity(dimension.SpecDimensionId, $"planned:{dimension.SpecDimensionId}")))
             .ToArray();
 
-        return new RenderResult(true, renderedEntities, plan.Validation);
+        return new RenderResult(
+            RenderStatus.Success,
+            renderedEntities,
+            plan.Validation,
+            GeometrySummary.FromPlan(plan, RenderStatus.Success, renderedEntities, plan.Validation));
     }
 
     private static PlannedEntity CreatePlannedTextEntity(EntitySpec entity, PlannedEntityKind kind)
@@ -244,7 +257,8 @@ public sealed class DrawingSpecPlanRenderer : IRenderer
             Position = entity.Position,
             Value = entity.Value,
             Height = entity.Height,
-            Rotation = entity.Rotation
+            Rotation = entity.Rotation,
+            TextStyleName = CadTextStyleStandards.ResolveForLayer(entity.Layer, entity.Height).Name
         };
     }
 

@@ -48,18 +48,6 @@ public static class DrawingSpecValidator
         new[] { "name", "color", "lineType", "lineWeight" },
         StringComparer.Ordinal);
 
-    private static readonly IReadOnlyDictionary<string, CadLayerDefinition> LayerDefinitions =
-        new Dictionary<string, CadLayerDefinition>(StringComparer.Ordinal)
-        {
-            [CadLayerNames.Outline] = new CadLayerDefinition(CadLayerNames.Outline, 7, "Continuous", 0.35),
-            [CadLayerNames.Center] = new CadLayerDefinition(CadLayerNames.Center, 1, "Center", 0.18),
-            [CadLayerNames.Dimension] = new CadLayerDefinition(CadLayerNames.Dimension, 3, "Continuous", 0.18),
-            ["TEXT"] = new CadLayerDefinition("TEXT", 2, "Continuous", 0.18),
-            ["HIDDEN"] = new CadLayerDefinition("HIDDEN", 8, "Hidden", 0.18),
-            ["CONSTRUCTION"] = new CadLayerDefinition("CONSTRUCTION", 9, "Continuous", 0.09),
-            ["TITLE"] = new CadLayerDefinition("TITLE", 4, "Continuous", 0.25)
-        };
-
     public static ValidationResult ValidateSchema(DrawingSpec spec)
     {
         var issues = new List<ValidationIssue>();
@@ -231,7 +219,7 @@ public static class DrawingSpecValidator
         return ToValidationResult(issues);
     }
 
-    public static IReadOnlyList<string> AllowedLayerNames => LayerDefinitions.Keys.ToArray();
+    public static IReadOnlyList<string> AllowedLayerNames => CadLayerStandards.Definitions.Keys.ToArray();
 
     private static void ValidateSchemaEntity(EntitySpec entity, string path, ICollection<ValidationIssue> issues)
     {
@@ -643,7 +631,13 @@ public static class DrawingSpecValidator
 
         foreach (var layer in layers)
         {
-            var name = layer?.Name ?? string.Empty;
+            if (layer == null)
+            {
+                AddIssue(issues, "invalid_type", "$.layers[?]", "Layer must be an object.");
+                continue;
+            }
+
+            var name = layer.Name ?? string.Empty;
             var path = $"$.layers[{(string.IsNullOrWhiteSpace(name) ? "?" : name)}].name";
 
             if (string.IsNullOrWhiteSpace(name))
@@ -657,13 +651,16 @@ public static class DrawingSpecValidator
                 AddIssue(issues, "duplicate_layer", path, $"Layer '{name}' is declared more than once.");
             }
 
-            if (!LayerDefinitions.ContainsKey(name))
+            if (!CadLayerStandards.TryGet(name, out var standard))
             {
                 AddIssue(issues, "unsupported_layer", path, $"Layer '{name}' is outside enterprise-default-v1.");
+                continue;
             }
+
+            ValidateLayerStandard(layer, standard, issues);
         }
 
-        foreach (var requiredLayer in new[] { CadLayerNames.Outline, CadLayerNames.Center, CadLayerNames.Dimension })
+        foreach (var requiredLayer in CadLayerStandards.RequiredProductionLayerNames)
         {
             if (!layerNames.Contains(requiredLayer))
             {
@@ -673,6 +670,41 @@ public static class DrawingSpecValidator
                     $"$.layers[{requiredLayer}]",
                     $"Layer '{requiredLayer}' is required for production DrawingSpec validation.");
             }
+        }
+    }
+
+    private static void ValidateLayerStandard(
+        LayerSpec layer,
+        CadLayerStandard standard,
+        ICollection<ValidationIssue> issues)
+    {
+        var pathPrefix = $"$.layers[{standard.Name}]";
+
+        if (layer.Color != standard.Color)
+        {
+            AddIssue(
+                issues,
+                "invalid_layer_color",
+                $"{pathPrefix}.color",
+                $"Layer '{standard.Name}' must use color index {standard.Color}.");
+        }
+
+        if (!string.Equals(layer.LineType, standard.LineType, StringComparison.Ordinal))
+        {
+            AddIssue(
+                issues,
+                "invalid_layer_linetype",
+                $"{pathPrefix}.lineType",
+                $"Layer '{standard.Name}' must use line type '{standard.LineType}'.");
+        }
+
+        if (Math.Abs(layer.LineWeight - standard.LineWeight) > 0.000001)
+        {
+            AddIssue(
+                issues,
+                "invalid_layer_lineweight",
+                $"{pathPrefix}.lineWeight",
+                $"Layer '{standard.Name}' must use line weight {standard.LineWeight:0.###} mm.");
         }
     }
 
@@ -797,8 +829,8 @@ public static class DrawingSpecValidator
 
         if ((string.Equals(entity.Type, EntityTypes.Text, StringComparison.Ordinal)
                 || string.Equals(entity.Type, EntityTypes.MText, StringComparison.Ordinal))
-            && !string.Equals(entity.Layer, "TEXT", StringComparison.Ordinal)
-            && !string.Equals(entity.Layer, "TITLE", StringComparison.Ordinal))
+            && !string.Equals(entity.Layer, CadLayerNames.Text, StringComparison.Ordinal)
+            && !string.Equals(entity.Layer, CadLayerNames.Title, StringComparison.Ordinal))
         {
             AddIssue(issues, "invalid_text_layer", $"{path}.layer", $"Text entity '{entity.Id}' must be on layer 'TEXT' or 'TITLE'.");
         }
@@ -1330,25 +1362,6 @@ public static class DrawingSpecValidator
     private static void AddIssue(ICollection<ValidationIssue> issues, string code, string path, string message)
     {
         issues.Add(new ValidationIssue(code, path, message, ValidationSeverity.Error));
-    }
-
-    private sealed class CadLayerDefinition
-    {
-        public CadLayerDefinition(string name, int color, string lineType, double lineWeight)
-        {
-            Name = name;
-            Color = color;
-            LineType = lineType;
-            LineWeight = lineWeight;
-        }
-
-        public string Name { get; }
-
-        public int Color { get; }
-
-        public string LineType { get; }
-
-        public double LineWeight { get; }
     }
 
     private sealed class JsonParser

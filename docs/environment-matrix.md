@@ -166,6 +166,30 @@ Manual ZWCAD Undo validation completed in the ZWCAD 2025 CAD process:
 - Ran one `UNDO` operation.
 - Confirmed the generated automatic drawing content was removed successfully in one undo step.
 
+## P3 Renderer Layer Style And Summary Evidence
+
+Date: 2026-04-28
+
+Implemented and build/test verified against the local source baseline:
+
+- `CadLayerStandards` is the shared source for the seven `enterprise-default-v1` layers: `OUTLINE`, `CENTER`, `DIM`, `TEXT`, `HIDDEN`, `CONSTRUCTION`, and `TITLE`.
+- Business validation rejects DrawingSpec layer color, line type, and line weight drift from the enterprise defaults before planning.
+- The ZWCAD writer now opens existing managed layers for write and reapplies the planned enterprise color, line type, line weight, and plot behavior.
+- `CONSTRUCTION` is marked non-plot by default when the layer is created or updated.
+- Missing required non-`Continuous` line types are loaded from standard ZWCAD line type files before failing with `missing_linetype` at stable paths such as `$.layers[CENTER].lineType`.
+- `DBText` and `MText` receive deterministic enterprise text styles from `CadTextStyleStandards`.
+- Dimensions receive deterministic enterprise dimension styles from `CadDimensionStyleStandards`; the centralized standards are the configuration entry point for future profile loading.
+- `RenderResult.Summary` now reports render status, entity and dimension counts, type counts, layer counts, bounding box, `specEntityId -> cadObjectId`, validation issues for failed/canceled renders, and export placeholders.
+- Automated verification: `dotnet .\src\ZwcadAi.Tests\bin\x64\Debug\net8.0\ZwcadAi.Tests.dll` passed 44 tests.
+- Build verification: `dotnet build ZwcadAi.sln -p:Platform=x64` passed and compiled `ZwcadAiPlugin.dll` against the local ZWCAD 2025 managed assemblies.
+
+Manual ZWCAD 2025 visual validation completed in the CAD process after the line type loading fix:
+
+- Loaded the rebuilt plugin with `NETLOAD`.
+- Ran `AIDRAW`.
+- Confirmed the render completed without the previous `missing_linetype` failure for `CENTER`.
+- Confirmed the generated output visually matched the expected P3 layer/style baseline for layer colors, line types, line weights, text styles, and dimension styles.
+
 ## Open Environment Gaps
 
 - ZWCAD 2026 and Windows 10 compatibility validation remain pending for later compatibility work.

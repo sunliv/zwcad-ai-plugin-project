@@ -287,6 +287,20 @@ Acceptance Criteria:
 - 用户取消不会写入正式实体。
 - Undo 行为可用。
 
+### P3 Renderer Baseline Closure
+
+Date: 2026-04-28
+
+Status:
+
+- 图层标准已固化为可验证的企业默认值：`OUTLINE` / `CENTER` / `DIM` / `TEXT` / `HIDDEN` / `CONSTRUCTION` / `TITLE`。
+- 业务校验会拒绝图层颜色、线型、线宽与 `enterprise-default-v1` 不一致的 DrawingSpec。
+- ZWCAD writer 会复用并更新已存在图层，创建缺失图层，并优先从标准线型文件加载 `Center` / `Hidden` 等必需线型；仍缺失时返回稳定错误。
+- text/mtext 已解析默认文字样式；dimension 已解析默认标注样式，并保留集中标准入口供后续配置化。
+- `RenderResult` 已输出最小几何摘要：状态、entity/dimension 数量、类型计数、图层计数、bounding box、`specEntityId -> cadObjectId`、失败/取消 issue、导出占位状态。
+- 已在 ZWCAD 2025 内完成 `NETLOAD` + `AIDRAW` 视觉验收，图层/样式基线通过。
+- P6 仍保留 DWG 反向提取、批量回归和关键尺寸比对的完整 GeometrySummary 工作。
+
 ## Phase P4: AI Service Integration
 
 ### P4-01 Implement Model Prompt Contract
@@ -494,4 +508,3 @@ Acceptance Criteria:
 - 用户能完成一次自然语言绘图。
 - 管理员能配置模型服务和企业标准。
 - 常见错误有处理说明。
-

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using ZwcadAi.Core;
 
@@ -24,15 +25,25 @@ public sealed class RenderContext
 public sealed class RenderResult
 {
     public RenderResult(bool success, IReadOnlyList<RenderedEntity> entities, ValidationResult validation)
-        : this(success ? RenderStatus.Success : RenderStatus.Failed, entities, validation)
+        : this(success ? RenderStatus.Success : RenderStatus.Failed, entities, validation, null)
     {
     }
 
     public RenderResult(RenderStatus status, IReadOnlyList<RenderedEntity> entities, ValidationResult validation)
+        : this(status, entities, validation, null)
+    {
+    }
+
+    public RenderResult(
+        RenderStatus status,
+        IReadOnlyList<RenderedEntity> entities,
+        ValidationResult validation,
+        GeometrySummary? summary)
     {
         Status = status;
-        Entities = entities;
-        Validation = validation;
+        Entities = entities ?? Array.Empty<RenderedEntity>();
+        Validation = validation ?? throw new ArgumentNullException(nameof(validation));
+        Summary = summary ?? GeometrySummary.FromRenderedEntities(Status, Entities, Validation);
     }
 
     public RenderStatus Status { get; }
@@ -44,6 +55,8 @@ public sealed class RenderResult
     public IReadOnlyList<RenderedEntity> Entities { get; }
 
     public ValidationResult Validation { get; }
+
+    public GeometrySummary Summary { get; }
 }
 
 public enum RenderStatus

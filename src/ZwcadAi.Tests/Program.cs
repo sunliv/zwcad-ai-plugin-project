@@ -29,13 +29,17 @@ public static class Program
             ("DrawingSpec schema rejects object model layer color zero", DrawingSpecSchemaRejectsObjectModelLayerColorZero),
             ("DrawingSpec business rules accept the fixed P1-03 sample", DrawingSpecBusinessRulesAcceptFixedP103Sample),
             ("DrawingSpec business rules reject unsupported layers", DrawingSpecBusinessRulesRejectUnsupportedLayers),
+            ("CAD layer standards expose P3 enterprise defaults", CadLayerStandardsExposeP3EnterpriseDefaults),
+            ("DrawingSpec business rules reject layer style drift", DrawingSpecBusinessRulesRejectLayerStyleDrift),
             ("DrawingSpec business rules reject oversized coordinates", DrawingSpecBusinessRulesRejectOversizedCoordinates),
             ("DrawingSpec business rules reject entity count over limit", DrawingSpecBusinessRulesRejectEntityCountOverLimit),
             ("DrawingSpec business rules reject incomplete angular dimensions", DrawingSpecBusinessRulesRejectIncompleteAngularDimensions),
             ("Renderer plans P1-03 plate entities on standard layers", RendererPlansP103PlateEntitiesOnStandardLayers),
+            ("Renderer resolves enterprise text and dimension styles", RendererResolvesEnterpriseTextAndDimensionStyles),
             ("Renderer maps every P3-01 basic entity id", RendererMapsEveryP301BasicEntityId),
             ("Renderer plans P3-02 aligned and angular dimensions", RendererPlansP302AlignedAndAngularDimensions),
             ("Renderer plans P3-02 hole array centerlines", RendererPlansP302HoleArrayCenterlines),
+            ("Renderer geometry summary captures counts layers bounds and mapping", RendererGeometrySummaryCapturesCountsLayersBoundsAndMapping),
             ("Renderer dimension failures locate stable dimension ids", RendererDimensionFailuresLocateStableDimensionIds),
             ("Renderer failures locate stable entity ids", RendererFailuresLocateStableEntityIds),
             ("Renderer rejects specs missing production layers", RendererRejectsSpecsMissingProductionLayers),
@@ -55,7 +59,8 @@ public static class Program
             ("Plugin writer uses shared transaction boundary", PluginWriterUsesSharedTransactionBoundary),
             ("Plugin writer failures locate stable entity and dimension ids", PluginWriterFailuresLocateStableEntityAndDimensionIds),
             ("Plugin writer supports P3-01 basic entity dispatch", PluginWriterSupportsP301BasicEntityDispatch),
-            ("Plugin writer supports P3-02 dimensions and center marks", PluginWriterSupportsP302DimensionsAndCenterMarks)
+            ("Plugin writer supports P3-02 dimensions and center marks", PluginWriterSupportsP302DimensionsAndCenterMarks),
+            ("Plugin writer applies enterprise layer and style standards", PluginWriterAppliesEnterpriseLayerAndStyleStandards)
         };
 
         foreach (var test in tests)
@@ -332,6 +337,52 @@ public static class Program
             $"Unsupported layer must report $.layers[BAD].name, got: {FormatIssues(result.Issues)}");
     }
 
+    private static void CadLayerStandardsExposeP3EnterpriseDefaults()
+    {
+        AssertSequenceEqual(
+            new[]
+            {
+                CadLayerNames.Outline,
+                CadLayerNames.Center,
+                CadLayerNames.Dimension,
+                CadLayerNames.Text,
+                CadLayerNames.Hidden,
+                CadLayerNames.Construction,
+                CadLayerNames.Title
+            },
+            CadLayerStandards.All.Select(layer => layer.Name).ToArray());
+
+        AssertLayerStandard(CadLayerNames.Outline, 7, "Continuous", 0.35);
+        AssertLayerStandard(CadLayerNames.Center, 1, "Center", 0.18);
+        AssertLayerStandard(CadLayerNames.Dimension, 3, "Continuous", 0.18);
+        AssertLayerStandard(CadLayerNames.Text, 2, "Continuous", 0.18);
+        AssertLayerStandard(CadLayerNames.Hidden, 8, "Hidden", 0.18);
+        AssertLayerStandard(CadLayerNames.Construction, 9, "Continuous", 0.09);
+        AssertLayerStandard(CadLayerNames.Title, 4, "Continuous", 0.25);
+    }
+
+    private static void DrawingSpecBusinessRulesRejectLayerStyleDrift()
+    {
+        var spec = RectangularPlateSample.Create();
+        var centerLayer = spec.Layers.Single(layer => layer.Name == CadLayerNames.Center);
+        centerLayer.Color = 6;
+        centerLayer.LineType = "Continuous";
+        centerLayer.LineWeight = 0.25;
+
+        var result = DrawingSpecValidator.ValidateBusinessRules(spec);
+
+        Assert(!result.IsValid, "Layer style values that drift from enterprise-default-v1 must fail business validation.");
+        Assert(
+            result.Issues.Any(issue => issue.Code == "invalid_layer_color" && issue.Path == "$.layers[CENTER].color"),
+            $"Layer color drift must report $.layers[CENTER].color, got: {FormatIssues(result.Issues)}");
+        Assert(
+            result.Issues.Any(issue => issue.Code == "invalid_layer_linetype" && issue.Path == "$.layers[CENTER].lineType"),
+            $"Layer linetype drift must report $.layers[CENTER].lineType, got: {FormatIssues(result.Issues)}");
+        Assert(
+            result.Issues.Any(issue => issue.Code == "invalid_layer_lineweight" && issue.Path == "$.layers[CENTER].lineWeight"),
+            $"Layer lineweight drift must report $.layers[CENTER].lineWeight, got: {FormatIssues(result.Issues)}");
+    }
+
     private static void DrawingSpecBusinessRulesRejectOversizedCoordinates()
     {
         var spec = RectangularPlateSample.Create();
@@ -427,6 +478,60 @@ public static class Program
 
         Assert(plan.Dimensions.All(dimension => dimension.Layer == "DIM"), "All dimensions must be on DIM layer.");
         AssertEqual("dim-hole-dia", plan.Dimensions.Single(dimension => dimension.Type == DimensionTypes.Diameter).SpecDimensionId);
+    }
+
+    private static void RendererResolvesEnterpriseTextAndDimensionStyles()
+    {
+        var spec = RectangularPlateSample.Create();
+        spec.Layers = StandardLayerSpecs(
+            CadLayerNames.Outline,
+            CadLayerNames.Center,
+            CadLayerNames.Dimension,
+            CadLayerNames.Text,
+            CadLayerNames.Title);
+        spec.Entities = spec.Entities.Concat(new[]
+        {
+            new EntitySpec
+            {
+                Id = "note-default",
+                Type = EntityTypes.Text,
+                Layer = CadLayerNames.Text,
+                Position = new DrawingPoint(0, 72),
+                Value = "GENERAL NOTE",
+                Height = 3.5,
+                Rotation = 15
+            },
+            new EntitySpec
+            {
+                Id = "title-main",
+                Type = EntityTypes.MText,
+                Layer = CadLayerNames.Title,
+                Position = new DrawingPoint(0, 84),
+                Value = "TITLE",
+                Height = 5.0,
+                Rotation = 0
+            }
+        }).ToArray();
+
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(spec);
+
+        Assert(plan.Validation.IsValid, $"Styled text sample should produce a valid render plan: {FormatIssues(plan.Validation.Issues)}");
+
+        var note = plan.Entities.Single(entity => entity.SpecEntityId == "note-default");
+        AssertEqual(CadTextStyleNames.Note, note.TextStyleName);
+        AssertEqual(15d, note.Rotation);
+        AssertEqual(3.5d, note.Height);
+
+        var title = plan.Entities.Single(entity => entity.SpecEntityId == "title-main");
+        AssertEqual(CadTextStyleNames.TitlePrimary, title.TextStyleName);
+        AssertEqual(5.0d, title.Height);
+
+        AssertEqual(
+            CadDimensionStyleNames.Mechanical,
+            plan.Dimensions.Single(dimension => dimension.SpecDimensionId == "dim-width").DimensionStyleName);
+        AssertEqual(
+            CadDimensionStyleNames.Diameter,
+            plan.Dimensions.Single(dimension => dimension.SpecDimensionId == "dim-hole-dia").DimensionStyleName);
     }
 
     private static void RendererMapsEveryP301BasicEntityId()
@@ -559,6 +664,40 @@ public static class Program
             "P3-02 renderer result must preserve centerline and dimension ids.");
     }
 
+    private static void RendererGeometrySummaryCapturesCountsLayersBoundsAndMapping()
+    {
+        var spec = RectangularPlateSample.Create();
+        var result = new DrawingSpecPlanRenderer().Render(
+            spec,
+            new RenderContext(spec.Metadata.RequestId, "enterprise-default-v1"));
+
+        Assert(result.Success, $"P1-03 sample should render for summary verification: {FormatIssues(result.Validation.Issues)}");
+
+        var summary = result.Summary;
+        AssertEqual(RenderStatus.Success, summary.Status);
+        Assert(summary.Success, "Successful render summary must report Success.");
+        AssertEqual(4, summary.EntityCount);
+        AssertEqual(3, summary.DimensionCount);
+        AssertEqual(7, summary.CadObjectCount);
+        AssertEqual(1, summary.TypeCounts[PlannedEntityKind.Polyline.ToString()]);
+        AssertEqual(1, summary.TypeCounts[PlannedEntityKind.Circle.ToString()]);
+        AssertEqual(2, summary.TypeCounts[PlannedEntityKind.CenterLine.ToString()]);
+        AssertEqual(2, summary.TypeCounts[DimensionTypes.Linear]);
+        AssertEqual(1, summary.TypeCounts[DimensionTypes.Diameter]);
+        AssertEqual(2, summary.LayerCounts[CadLayerNames.Outline]);
+        AssertEqual(2, summary.LayerCounts[CadLayerNames.Center]);
+        AssertEqual(3, summary.LayerCounts[CadLayerNames.Dimension]);
+        AssertEqual("planned:outer-profile", summary.ObjectIdBySpecId["outer-profile"]);
+        AssertEqual("planned:dim-hole-dia", summary.ObjectIdBySpecId["dim-hole-dia"]);
+        AssertEqual("not_requested", summary.ExportStatus);
+        AssertEqual(string.Empty, summary.OutputPath);
+        Assert(summary.Bounds != null, "Successful summary must include a bounding box.");
+        AssertEqual(0d, summary.Bounds!.MinX);
+        AssertEqual(-12d, summary.Bounds.MinY);
+        AssertEqual(112d, summary.Bounds.MaxX);
+        AssertEqual(60d, summary.Bounds.MaxY);
+    }
+
     private static void RendererDimensionFailuresLocateStableDimensionIds()
     {
         var spec = ReadExampleSpec("annotation-angular-aligned.example.json");
@@ -646,6 +785,9 @@ public static class Program
         Assert(result.Validation.IsValid, "Validation should be valid.");
         AssertEqual("hole-1", result.Entities.Single().SpecEntityId);
         AssertEqual("cad-object-1", result.Entities.Single().CadObjectId);
+        AssertEqual(RenderStatus.Success, result.Summary.Status);
+        AssertEqual(1, result.Summary.CadObjectCount);
+        AssertEqual("cad-object-1", result.Summary.ObjectIdBySpecId["hole-1"]);
     }
 
     private static void WriterTransactionBoundaryCommitsSuccessfulWritesOnce()
@@ -666,6 +808,10 @@ public static class Program
         Assert(scope.Disposed, "Transaction scope must be disposed after render.");
         AssertEqual(plan.Entities.Count + plan.Dimensions.Count, result.Entities.Count);
         AssertEqual(result.Entities.Count, scope.CommittedEntities.Count);
+        AssertEqual(RenderStatus.Success, result.Summary.Status);
+        AssertEqual(plan.Entities.Count, result.Summary.EntityCount);
+        AssertEqual(plan.Dimensions.Count, result.Summary.DimensionCount);
+        AssertEqual(result.Entities.Count, result.Summary.CadObjectCount);
     }
 
     private static void WriterTransactionBoundaryRollsBackInjectedEntityFailures()
@@ -690,6 +836,10 @@ public static class Program
         Assert(scope.Disposed, "Failed transaction scope must still be disposed.");
         AssertEqual(0, scope.CommittedEntities.Count);
         AssertEqual(0, result.Entities.Count);
+        AssertEqual(RenderStatus.Failed, result.Summary.Status);
+        AssertEqual(0, result.Summary.EntityCount);
+        AssertEqual(0, result.Summary.DimensionCount);
+        AssertEqual(0, result.Summary.ObjectIdBySpecId.Count);
         Assert(
             result.Validation.Issues.Any(issue =>
                 issue.Code == "injected_writer_failure" && issue.Path == "$.entities[hole-1]"),
@@ -717,6 +867,10 @@ public static class Program
         Assert(scope.Disposed, "Failed transaction scope must still be disposed.");
         AssertEqual(0, scope.CommittedEntities.Count);
         AssertEqual(0, result.Entities.Count);
+        AssertEqual(RenderStatus.Failed, result.Summary.Status);
+        AssertEqual(0, result.Summary.EntityCount);
+        AssertEqual(0, result.Summary.DimensionCount);
+        AssertEqual(0, result.Summary.ObjectIdBySpecId.Count);
         Assert(
             result.Validation.Issues.Any(issue =>
                 issue.Code == "injected_writer_failure" && issue.Path == "$.dimensions[dim-hole-dia]"),
@@ -754,6 +908,11 @@ public static class Program
         Assert(scope.Disposed, "Canceled transaction scope must still be disposed.");
         AssertEqual(0, scope.CommittedEntities.Count);
         AssertEqual(0, result.Entities.Count);
+        AssertEqual(RenderStatus.Canceled, result.Summary.Status);
+        Assert(result.Summary.Canceled, "Canceled summary must report Canceled.");
+        AssertEqual(0, result.Summary.EntityCount);
+        AssertEqual(0, result.Summary.DimensionCount);
+        AssertEqual(0, result.Summary.ObjectIdBySpecId.Count);
         Assert(
             result.Validation.Issues.Any(issue =>
                 issue.Code == "render_canceled" && issue.Path == "$"),
@@ -1001,6 +1160,43 @@ public static class Program
             "ZWCAD writer must render center mark expansions and explicit centerlines through line entities.");
     }
 
+    private static void PluginWriterAppliesEnterpriseLayerAndStyleStandards()
+    {
+        var source = ReadPluginSource();
+
+        Assert(
+            source.Contains("ApplyLayerStandard", StringComparison.Ordinal)
+                && source.Contains("OpenMode.ForWrite", StringComparison.Ordinal),
+            "ZWCAD writer must reuse existing managed layers and update them to the enterprise standard.");
+        var loadLinetypeIndex = source.IndexOf(
+            "TryLoadStandardLinetype(database, linetypeTable, layer.LineType)",
+            StringComparison.Ordinal);
+        var missingLinetypeIndex = source.IndexOf("\"missing_linetype\"", StringComparison.Ordinal);
+        Assert(
+            loadLinetypeIndex >= 0
+                && source.Contains("LoadLineTypeFile", StringComparison.Ordinal)
+                && source.Contains("zwcad.lin", StringComparison.Ordinal)
+                && source.Contains("zwcadiso.lin", StringComparison.Ordinal)
+                && missingLinetypeIndex > loadLinetypeIndex
+                && source.Contains("$.layers[", StringComparison.Ordinal)
+                && source.Contains(".lineType", StringComparison.Ordinal),
+            "ZWCAD writer must load standard linetypes before reporting missing_linetype for unavailable custom linetypes.");
+        Assert(
+            source.Contains("IsPlottable = false", StringComparison.Ordinal)
+                || source.Contains("IsPlottable = !string.Equals(layer.Name, CadLayerNames.Construction", StringComparison.Ordinal),
+            "CONSTRUCTION layer must be marked non-plot by default.");
+        Assert(
+            source.Contains("TextStyleTable", StringComparison.Ordinal)
+                && source.Contains("CadTextStyleStandards.Definitions", StringComparison.Ordinal)
+                && source.Contains("TextStyleId", StringComparison.Ordinal),
+            "DBText and MText must use deterministic enterprise text styles.");
+        Assert(
+            source.Contains("DimStyleTable", StringComparison.Ordinal)
+                && source.Contains("CadDimensionStyleStandards.Definitions", StringComparison.Ordinal)
+                && source.Contains("DimensionStyleName", StringComparison.Ordinal),
+            "Dimensions must use deterministic enterprise dimension styles with a configurable helper path.");
+    }
+
     private static IReadOnlyList<RenderedEntity> SimulatePlanWrites(
         IWriterTransactionScope transaction,
         WriterTransactionContext context)
@@ -1078,6 +1274,21 @@ public static class Program
             ["note-1"] = PlannedEntityKind.Text,
             ["note-mtext-1"] = PlannedEntityKind.MText
         };
+    }
+
+    private static IReadOnlyList<LayerSpec> StandardLayerSpecs(params string[] layerNames)
+    {
+        return layerNames
+            .Select(name => CadLayerStandards.Definitions[name].ToLayerSpec())
+            .ToArray();
+    }
+
+    private static void AssertLayerStandard(string name, int color, string lineType, double lineWeight)
+    {
+        Assert(CadLayerStandards.TryGet(name, out var standard), $"Layer standard '{name}' must exist.");
+        AssertEqual(color, standard.Color);
+        AssertEqual(lineType, standard.LineType);
+        AssertEqual(lineWeight, standard.LineWeight);
     }
 
     private static string ReadExampleJson(string fileName)

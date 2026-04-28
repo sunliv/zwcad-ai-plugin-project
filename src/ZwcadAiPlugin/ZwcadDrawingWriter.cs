@@ -24,6 +24,9 @@ public sealed class ZwcadDrawingWriter
             [PlannedEntityKind.MText] = CreateMText
         };
 
+    private static readonly IReadOnlyList<string> StandardLinetypeFiles =
+        new[] { "zwcad.lin", "zwcadiso.lin", "acad.lin" };
+
     public RenderResult Render(DrawingRenderPlan plan)
     {
         return Render(plan, WriterRenderOptions.Default);
@@ -62,6 +65,8 @@ public sealed class ZwcadDrawingWriter
         var renderedEntities = new List<RenderedEntity>();
 
         EnsureLayers(database, transaction, plan.Layers);
+        var textStyleIds = EnsureTextStyles(database, transaction);
+        var dimensionStyleIds = EnsureDimensionStyles(database, transaction, textStyleIds);
 
         var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
         var modelSpace = (BlockTableRecord)transaction.GetObject(
@@ -74,7 +79,7 @@ public sealed class ZwcadDrawingWriter
 
             try
             {
-                var cadEntity = CreateCadEntity(plannedEntity);
+                var cadEntity = CreateCadEntity(plannedEntity, textStyleIds);
                 var objectId = modelSpace.AppendEntity(cadEntity);
                 transaction.AddNewlyCreatedDBObject(cadEntity, true);
                 var renderedEntity = new RenderedEntity(plannedEntity.SpecEntityId, objectId.ToString());
@@ -101,7 +106,7 @@ public sealed class ZwcadDrawingWriter
 
             try
             {
-                var cadDimension = CreateCadDimension(database, plan, plannedDimension);
+                var cadDimension = CreateCadDimension(plan, plannedDimension, dimensionStyleIds);
                 var objectId = modelSpace.AppendEntity(cadDimension);
                 transaction.AddNewlyCreatedDBObject(cadDimension, true);
                 var renderedEntity = new RenderedEntity(plannedDimension.SpecDimensionId, objectId.ToString());
@@ -132,31 +137,205 @@ public sealed class ZwcadDrawingWriter
 
         foreach (var layer in layers)
         {
+            if (!CadLayerStandards.TryGet(layer.Name, out _))
+            {
+                throw new WriterRenderException(
+                    "unsupported_layer",
+                    $"$.layers[{layer.Name}].name",
+                    $"Layer '{layer.Name}' is outside enterprise-default-v1.");
+            }
+
+            LayerTableRecord layerRecord;
             if (layerTable.Has(layer.Name))
             {
-                continue;
+                layerRecord = (LayerTableRecord)transaction.GetObject(layerTable[layer.Name], OpenMode.ForWrite);
+            }
+            else
+            {
+                layerTable.UpgradeOpen();
+
+                layerRecord = new LayerTableRecord
+                {
+                    Name = layer.Name
+                };
+                layerTable.Add(layerRecord);
+                transaction.AddNewlyCreatedDBObject(layerRecord, true);
             }
 
-            layerTable.UpgradeOpen();
-
-            var layerRecord = new LayerTableRecord
-            {
-                Name = layer.Name,
-                Color = Color.FromColorIndex(ColorMethod.ByAci, (short)layer.Color),
-                LineWeight = ToLineWeight(layer.LineWeight)
-            };
-
-            if (!string.IsNullOrWhiteSpace(layer.LineType) && linetypeTable.Has(layer.LineType))
-            {
-                layerRecord.LinetypeObjectId = linetypeTable[layer.LineType];
-            }
-
-            layerTable.Add(layerRecord);
-            transaction.AddNewlyCreatedDBObject(layerRecord, true);
+            ApplyLayerStandard(database, layerRecord, layer, linetypeTable);
         }
     }
 
-    private static Entity CreateCadEntity(PlannedEntity plannedEntity)
+    private static void ApplyLayerStandard(
+        Database database,
+        LayerTableRecord layerRecord,
+        LayerSpec layer,
+        LinetypeTable linetypeTable)
+    {
+        layerRecord.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)layer.Color);
+        layerRecord.LineWeight = ToLineWeight(layer.LineWeight);
+        layerRecord.IsPlottable = !string.Equals(layer.Name, CadLayerNames.Construction, StringComparison.Ordinal);
+
+        var linetypeId = ResolveLinetypeId(database, linetypeTable, layer);
+        if (!linetypeId.IsNull)
+        {
+            layerRecord.LinetypeObjectId = linetypeId;
+        }
+    }
+
+    private static ObjectId ResolveLinetypeId(Database database, LinetypeTable linetypeTable, LayerSpec layer)
+    {
+        if (string.IsNullOrWhiteSpace(layer.LineType))
+        {
+            return ObjectId.Null;
+        }
+
+        if (linetypeTable.Has(layer.LineType))
+        {
+            return linetypeTable[layer.LineType];
+        }
+
+        if (string.Equals(layer.LineType, "Continuous", StringComparison.Ordinal))
+        {
+            return ObjectId.Null;
+        }
+
+        TryLoadStandardLinetype(database, linetypeTable, layer.LineType);
+        if (linetypeTable.Has(layer.LineType))
+        {
+            return linetypeTable[layer.LineType];
+        }
+
+        throw new WriterRenderException(
+            "missing_linetype",
+            $"$.layers[{layer.Name}].lineType",
+            $"Layer '{layer.Name}' requires missing linetype '{layer.LineType}'.");
+    }
+
+    private static void TryLoadStandardLinetype(Database database, LinetypeTable linetypeTable, string lineType)
+    {
+        foreach (var fileName in StandardLinetypeFiles)
+        {
+            try
+            {
+                database.LoadLineTypeFile(lineType, fileName);
+            }
+            catch (Exception)
+            {
+                // Fall through to the next standard file and keep the final error path deterministic.
+            }
+
+            if (linetypeTable.Has(lineType))
+            {
+                return;
+            }
+        }
+    }
+
+    private static IReadOnlyDictionary<string, ObjectId> EnsureTextStyles(Database database, Transaction transaction)
+    {
+        var textStyleTable = (TextStyleTable)transaction.GetObject(database.TextStyleTableId, OpenMode.ForRead);
+        var styleIds = new Dictionary<string, ObjectId>(StringComparer.Ordinal);
+
+        foreach (var standard in CadTextStyleStandards.Definitions.Values)
+        {
+            styleIds[standard.Name] = EnsureTextStyle(textStyleTable, transaction, standard);
+        }
+
+        return styleIds;
+    }
+
+    private static ObjectId EnsureTextStyle(
+        TextStyleTable textStyleTable,
+        Transaction transaction,
+        CadTextStyleStandard standard)
+    {
+        TextStyleTableRecord textStyleRecord;
+        if (textStyleTable.Has(standard.Name))
+        {
+            textStyleRecord = (TextStyleTableRecord)transaction.GetObject(textStyleTable[standard.Name], OpenMode.ForWrite);
+        }
+        else
+        {
+            textStyleTable.UpgradeOpen();
+            textStyleRecord = new TextStyleTableRecord
+            {
+                Name = standard.Name
+            };
+            textStyleTable.Add(textStyleRecord);
+            transaction.AddNewlyCreatedDBObject(textStyleRecord, true);
+        }
+
+        ApplyTextStyleStandard(textStyleRecord, standard);
+        return textStyleRecord.ObjectId;
+    }
+
+    private static void ApplyTextStyleStandard(TextStyleTableRecord textStyleRecord, CadTextStyleStandard standard)
+    {
+        textStyleRecord.FileName = standard.FontFileName;
+        textStyleRecord.TextSize = standard.Height;
+        textStyleRecord.XScale = standard.WidthFactor;
+        textStyleRecord.ObliquingAngle = standard.ObliqueAngle;
+    }
+
+    private static IReadOnlyDictionary<string, ObjectId> EnsureDimensionStyles(
+        Database database,
+        Transaction transaction,
+        IReadOnlyDictionary<string, ObjectId> textStyleIds)
+    {
+        var dimStyleTable = (DimStyleTable)transaction.GetObject(database.DimStyleTableId, OpenMode.ForRead);
+        var styleIds = new Dictionary<string, ObjectId>(StringComparer.Ordinal);
+
+        foreach (var standard in CadDimensionStyleStandards.Definitions.Values)
+        {
+            styleIds[standard.Name] = EnsureDimensionStyle(dimStyleTable, transaction, textStyleIds, standard);
+        }
+
+        return styleIds;
+    }
+
+    private static ObjectId EnsureDimensionStyle(
+        DimStyleTable dimStyleTable,
+        Transaction transaction,
+        IReadOnlyDictionary<string, ObjectId> textStyleIds,
+        CadDimensionStyleStandard standard)
+    {
+        DimStyleTableRecord dimStyleRecord;
+        if (dimStyleTable.Has(standard.Name))
+        {
+            dimStyleRecord = (DimStyleTableRecord)transaction.GetObject(dimStyleTable[standard.Name], OpenMode.ForWrite);
+        }
+        else
+        {
+            dimStyleTable.UpgradeOpen();
+            dimStyleRecord = new DimStyleTableRecord
+            {
+                Name = standard.Name
+            };
+            dimStyleTable.Add(dimStyleRecord);
+            transaction.AddNewlyCreatedDBObject(dimStyleRecord, true);
+        }
+
+        ApplyDimensionStyleStandard(dimStyleRecord, textStyleIds, standard);
+        return dimStyleRecord.ObjectId;
+    }
+
+    private static void ApplyDimensionStyleStandard(
+        DimStyleTableRecord dimStyleRecord,
+        IReadOnlyDictionary<string, ObjectId> textStyleIds,
+        CadDimensionStyleStandard standard)
+    {
+        dimStyleRecord.Dimtxsty = textStyleIds[standard.TextStyleName];
+        dimStyleRecord.Dimtxt = standard.TextHeight;
+        dimStyleRecord.Dimasz = standard.ArrowSize;
+        dimStyleRecord.Dimexo = standard.ExtensionOffset;
+        dimStyleRecord.Dimexe = standard.ExtensionBeyond;
+        dimStyleRecord.Dimdec = standard.Precision;
+    }
+
+    private static Entity CreateCadEntity(
+        PlannedEntity plannedEntity,
+        IReadOnlyDictionary<string, ObjectId> textStyleIds)
     {
         if (!EntityFactories.TryGetValue(plannedEntity.Kind, out var factory))
         {
@@ -167,7 +346,36 @@ public sealed class ZwcadDrawingWriter
 
         var cadEntity = factory(plannedEntity);
         cadEntity.Layer = plannedEntity.Layer;
+        ApplyEntityStyle(cadEntity, plannedEntity, textStyleIds);
         return cadEntity;
+    }
+
+    private static void ApplyEntityStyle(
+        Entity cadEntity,
+        PlannedEntity plannedEntity,
+        IReadOnlyDictionary<string, ObjectId> textStyleIds)
+    {
+        if (cadEntity is DBText text)
+        {
+            text.TextStyleId = ResolveTextStyleId(plannedEntity, textStyleIds);
+            return;
+        }
+
+        if (cadEntity is MText mtext)
+        {
+            mtext.TextStyleId = ResolveTextStyleId(plannedEntity, textStyleIds);
+        }
+    }
+
+    private static ObjectId ResolveTextStyleId(
+        PlannedEntity plannedEntity,
+        IReadOnlyDictionary<string, ObjectId> textStyleIds)
+    {
+        var textStyleName = string.IsNullOrWhiteSpace(plannedEntity.TextStyleName)
+            ? CadTextStyleStandards.ResolveForLayer(plannedEntity.Layer, plannedEntity.Height).Name
+            : plannedEntity.TextStyleName;
+
+        return textStyleIds[textStyleName];
     }
 
     private static Polyline CreatePolyline(PlannedEntity plannedEntity)
@@ -257,25 +465,29 @@ public sealed class ZwcadDrawingWriter
         };
     }
 
-    private static Entity CreateCadDimension(Database database, DrawingRenderPlan plan, PlannedDimension plannedDimension)
+    private static Entity CreateCadDimension(
+        DrawingRenderPlan plan,
+        PlannedDimension plannedDimension,
+        IReadOnlyDictionary<string, ObjectId> dimensionStyleIds)
     {
+        var dimensionStyleId = ResolveDimensionStyleId(plannedDimension, dimensionStyleIds);
         Entity dimension;
         switch (plannedDimension.Type)
         {
             case DimensionTypes.Linear:
-                dimension = CreateLinearDimension(database, plannedDimension);
+                dimension = CreateLinearDimension(dimensionStyleId, plannedDimension);
                 break;
             case DimensionTypes.Aligned:
-                dimension = CreateAlignedDimension(database, plannedDimension);
+                dimension = CreateAlignedDimension(dimensionStyleId, plannedDimension);
                 break;
             case DimensionTypes.Radius:
-                dimension = CreateRadiusDimension(database, plan, plannedDimension);
+                dimension = CreateRadiusDimension(dimensionStyleId, plan, plannedDimension);
                 break;
             case DimensionTypes.Diameter:
-                dimension = CreateDiameterDimension(database, plan, plannedDimension);
+                dimension = CreateDiameterDimension(dimensionStyleId, plan, plannedDimension);
                 break;
             case DimensionTypes.Angular:
-                dimension = CreateAngularDimension(database, plannedDimension);
+                dimension = CreateAngularDimension(dimensionStyleId, plannedDimension);
                 break;
             default:
                 throw CreateDimensionFailure(
@@ -287,7 +499,18 @@ public sealed class ZwcadDrawingWriter
         return dimension;
     }
 
-    private static RotatedDimension CreateLinearDimension(Database database, PlannedDimension plannedDimension)
+    private static ObjectId ResolveDimensionStyleId(
+        PlannedDimension plannedDimension,
+        IReadOnlyDictionary<string, ObjectId> dimensionStyleIds)
+    {
+        var dimensionStyleName = string.IsNullOrWhiteSpace(plannedDimension.DimensionStyleName)
+            ? CadDimensionStyleStandards.ResolveForDimensionType(plannedDimension.Type).Name
+            : plannedDimension.DimensionStyleName;
+
+        return dimensionStyleIds[dimensionStyleName];
+    }
+
+    private static RotatedDimension CreateLinearDimension(ObjectId dimensionStyleId, PlannedDimension plannedDimension)
     {
         if (plannedDimension.From == null || plannedDimension.To == null || plannedDimension.Offset == null)
         {
@@ -305,10 +528,10 @@ public sealed class ZwcadDrawingWriter
             ToPoint3d(plannedDimension.To),
             dimensionLinePoint,
             plannedDimension.Text,
-            database.Dimstyle);
+            dimensionStyleId);
     }
 
-    private static AlignedDimension CreateAlignedDimension(Database database, PlannedDimension plannedDimension)
+    private static AlignedDimension CreateAlignedDimension(ObjectId dimensionStyleId, PlannedDimension plannedDimension)
     {
         if (plannedDimension.From == null || plannedDimension.To == null || plannedDimension.Offset == null)
         {
@@ -320,11 +543,11 @@ public sealed class ZwcadDrawingWriter
             ToPoint3d(plannedDimension.To),
             ToOffsetPoint3d(plannedDimension.From, plannedDimension.Offset),
             plannedDimension.Text,
-            database.Dimstyle);
+            dimensionStyleId);
     }
 
     private static RadialDimension CreateRadiusDimension(
-        Database database,
+        ObjectId dimensionStyleId,
         DrawingRenderPlan plan,
         PlannedDimension plannedDimension)
     {
@@ -350,11 +573,11 @@ public sealed class ZwcadDrawingWriter
             chordPoint,
             0,
             plannedDimension.Text,
-            database.Dimstyle);
+            dimensionStyleId);
     }
 
     private static DiametricDimension CreateDiameterDimension(
-        Database database,
+        ObjectId dimensionStyleId,
         DrawingRenderPlan plan,
         PlannedDimension plannedDimension)
     {
@@ -372,10 +595,10 @@ public sealed class ZwcadDrawingWriter
         var left = new Point3d(targetCircle.Center.X - targetCircle.Radius, targetCircle.Center.Y, 0);
         var right = new Point3d(targetCircle.Center.X + targetCircle.Radius, targetCircle.Center.Y, 0);
 
-        return new DiametricDimension(left, right, 0, plannedDimension.Text, database.Dimstyle);
+        return new DiametricDimension(left, right, 0, plannedDimension.Text, dimensionStyleId);
     }
 
-    private static Point3AngularDimension CreateAngularDimension(Database database, PlannedDimension plannedDimension)
+    private static Point3AngularDimension CreateAngularDimension(ObjectId dimensionStyleId, PlannedDimension plannedDimension)
     {
         if (plannedDimension.Center == null
             || plannedDimension.From == null
@@ -391,7 +614,7 @@ public sealed class ZwcadDrawingWriter
             ToPoint3d(plannedDimension.To),
             ToOffsetPoint3d(plannedDimension.Center, plannedDimension.Offset),
             plannedDimension.Text,
-            database.Dimstyle);
+            dimensionStyleId);
     }
 
     private static Point2d ToPoint2d(DrawingPoint point)

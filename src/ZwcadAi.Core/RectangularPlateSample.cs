@@ -109,10 +109,3 @@ public static class RectangularPlateSample
         };
     }
 }
-
-public static class CadLayerNames
-{
-    public const string Outline = "OUTLINE";
-    public const string Center = "CENTER";
-    public const string Dimension = "DIM";
-}

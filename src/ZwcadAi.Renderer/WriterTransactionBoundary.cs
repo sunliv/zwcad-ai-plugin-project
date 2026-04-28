@@ -177,7 +177,11 @@ public sealed class WriterTransactionBoundary
 
         if (!plan.Validation.IsValid)
         {
-            return new RenderResult(RenderStatus.Failed, Array.Empty<RenderedEntity>(), plan.Validation);
+            return CreateRenderResult(
+                plan,
+                RenderStatus.Failed,
+                Array.Empty<RenderedEntity>(),
+                plan.Validation);
         }
 
         var effectiveOptions = options ?? WriterRenderOptions.Default;
@@ -193,47 +197,73 @@ public sealed class WriterTransactionBoundary
                 context.BeforeCommit(renderedEntities);
                 transaction.Commit();
 
-                return new RenderResult(RenderStatus.Success, renderedEntities, ValidationResult.Success());
+                return CreateRenderResult(
+                    plan,
+                    RenderStatus.Success,
+                    renderedEntities,
+                    ValidationResult.Success());
             }
         }
         catch (OperationCanceledException)
         {
-            return new RenderResult(
+            var validation = ValidationResult.Failure(new[]
+            {
+                new ValidationIssue(
+                    "render_canceled",
+                    "$",
+                    "Render was canceled before the writer transaction committed.",
+                    ValidationSeverity.Warning)
+            });
+
+            return CreateRenderResult(
+                plan,
                 RenderStatus.Canceled,
                 Array.Empty<RenderedEntity>(),
-                ValidationResult.Failure(new[]
-                {
-                    new ValidationIssue(
-                        "render_canceled",
-                        "$",
-                        "Render was canceled before the writer transaction committed.",
-                        ValidationSeverity.Warning)
-                }));
+                validation);
         }
         catch (WriterRenderException exception)
         {
-            return new RenderResult(
+            var validation = ValidationResult.Failure(new[]
+            {
+                new ValidationIssue(exception.Code, exception.Path, exception.Message, ValidationSeverity.Error)
+            });
+
+            return CreateRenderResult(
+                plan,
                 RenderStatus.Failed,
                 Array.Empty<RenderedEntity>(),
-                ValidationResult.Failure(new[]
-                {
-                    new ValidationIssue(exception.Code, exception.Path, exception.Message, ValidationSeverity.Error)
-                }));
+                validation);
         }
         catch (Exception exception)
         {
-            return new RenderResult(
+            var validation = ValidationResult.Failure(new[]
+            {
+                new ValidationIssue(
+                    "writer_transaction_failed",
+                    "$",
+                    exception.Message,
+                    ValidationSeverity.Error)
+            });
+
+            return CreateRenderResult(
+                plan,
                 RenderStatus.Failed,
                 Array.Empty<RenderedEntity>(),
-                ValidationResult.Failure(new[]
-                {
-                    new ValidationIssue(
-                        "writer_transaction_failed",
-                        "$",
-                        exception.Message,
-                        ValidationSeverity.Error)
-                }));
+                validation);
         }
+    }
+
+    private static RenderResult CreateRenderResult(
+        DrawingRenderPlan plan,
+        RenderStatus status,
+        IReadOnlyList<RenderedEntity> renderedEntities,
+        ValidationResult validation)
+    {
+        return new RenderResult(
+            status,
+            renderedEntities,
+            validation,
+            GeometrySummary.FromPlan(plan, status, renderedEntities, validation));
     }
 }
 
