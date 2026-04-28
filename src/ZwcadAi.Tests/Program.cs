@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Xml.Linq;
 using ZwcadAi.AiService;
 using ZwcadAi.Core;
@@ -39,6 +40,10 @@ public static class Program
             ("Renderer failures locate stable entity ids", RendererFailuresLocateStableEntityIds),
             ("Renderer rejects specs missing production layers", RendererRejectsSpecsMissingProductionLayers),
             ("Renderer result preserves spec-to-CAD mapping", RendererResultPreservesMapping),
+            ("Writer transaction boundary commits successful writes once", WriterTransactionBoundaryCommitsSuccessfulWritesOnce),
+            ("Writer transaction boundary rolls back injected entity failures", WriterTransactionBoundaryRollsBackInjectedEntityFailures),
+            ("Writer transaction boundary rolls back injected dimension failures", WriterTransactionBoundaryRollsBackInjectedDimensionFailures),
+            ("Writer transaction boundary treats cancellation as non-committed render", WriterTransactionBoundaryTreatsCancellationAsNonCommittedRender),
             ("Project references follow architecture boundaries", ProjectReferencesFollowArchitectureBoundaries),
             ("Core project has no ZWCAD runtime references", CoreProjectHasNoZwcadRuntimeReferences),
             ("Plugin references ZWCAD 2025 managed assemblies", PluginReferencesZwcad2025ManagedAssemblies),
@@ -47,6 +52,8 @@ public static class Program
             ("Plugin registers AIEXPORT command", PluginRegistersAiExportCommand),
             ("AIEXPORT saves a DWG copy without saving the active drawing", PluginAiExportSavesDwgCopyWithoutSavingActiveDrawing),
             ("AIEXPORT covers the PDF plot-to-file path", PluginAiExportCoversPdfPlotToFilePath),
+            ("Plugin writer uses shared transaction boundary", PluginWriterUsesSharedTransactionBoundary),
+            ("Plugin writer failures locate stable entity and dimension ids", PluginWriterFailuresLocateStableEntityAndDimensionIds),
             ("Plugin writer supports P3-01 basic entity dispatch", PluginWriterSupportsP301BasicEntityDispatch),
             ("Plugin writer supports P3-02 dimensions and center marks", PluginWriterSupportsP302DimensionsAndCenterMarks)
         };
@@ -641,6 +648,118 @@ public static class Program
         AssertEqual("cad-object-1", result.Entities.Single().CadObjectId);
     }
 
+    private static void WriterTransactionBoundaryCommitsSuccessfulWritesOnce()
+    {
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(RectangularPlateSample.Create());
+        FakeWriterTransactionScope? scope = null;
+        var boundary = new WriterTransactionBoundary(() =>
+        {
+            scope = new FakeWriterTransactionScope();
+            return scope;
+        });
+
+        var result = boundary.Execute(plan, WriterRenderOptions.Default, SimulatePlanWrites);
+
+        Assert(result.Success, $"Successful fake writer pass should commit: {FormatIssues(result.Validation.Issues)}");
+        Assert(scope != null, "Transaction scope must be created for a valid plan.");
+        Assert(scope!.CommitCalled, "Successful writer pass must call Commit exactly once.");
+        Assert(scope.Disposed, "Transaction scope must be disposed after render.");
+        AssertEqual(plan.Entities.Count + plan.Dimensions.Count, result.Entities.Count);
+        AssertEqual(result.Entities.Count, scope.CommittedEntities.Count);
+    }
+
+    private static void WriterTransactionBoundaryRollsBackInjectedEntityFailures()
+    {
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(RectangularPlateSample.Create());
+        FakeWriterTransactionScope? scope = null;
+        var boundary = new WriterTransactionBoundary(() =>
+        {
+            scope = new FakeWriterTransactionScope();
+            return scope;
+        });
+
+        var result = boundary.Execute(
+            plan,
+            new WriterRenderOptions(failureInjector: WriterFailureInjection.AfterEntity("hole-1")),
+            SimulatePlanWrites);
+
+        Assert(!result.Success, "Injected entity failure must fail the render result.");
+        Assert(!result.Canceled, "Injected entity failure is an error, not a cancellation.");
+        Assert(scope != null, "Transaction scope must be created before mid-render entity failure.");
+        Assert(!scope!.CommitCalled, "Injected entity failure must not commit the transaction.");
+        Assert(scope.Disposed, "Failed transaction scope must still be disposed.");
+        AssertEqual(0, scope.CommittedEntities.Count);
+        AssertEqual(0, result.Entities.Count);
+        Assert(
+            result.Validation.Issues.Any(issue =>
+                issue.Code == "injected_writer_failure" && issue.Path == "$.entities[hole-1]"),
+            $"Injected entity failure must report $.entities[hole-1], got: {FormatIssues(result.Validation.Issues)}");
+    }
+
+    private static void WriterTransactionBoundaryRollsBackInjectedDimensionFailures()
+    {
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(RectangularPlateSample.Create());
+        FakeWriterTransactionScope? scope = null;
+        var boundary = new WriterTransactionBoundary(() =>
+        {
+            scope = new FakeWriterTransactionScope();
+            return scope;
+        });
+
+        var result = boundary.Execute(
+            plan,
+            new WriterRenderOptions(failureInjector: WriterFailureInjection.AfterDimension("dim-hole-dia")),
+            SimulatePlanWrites);
+
+        Assert(!result.Success, "Injected dimension failure must fail the render result.");
+        Assert(scope != null, "Transaction scope must be created before mid-render dimension failure.");
+        Assert(!scope!.CommitCalled, "Injected dimension failure must not commit the transaction.");
+        Assert(scope.Disposed, "Failed transaction scope must still be disposed.");
+        AssertEqual(0, scope.CommittedEntities.Count);
+        AssertEqual(0, result.Entities.Count);
+        Assert(
+            result.Validation.Issues.Any(issue =>
+                issue.Code == "injected_writer_failure" && issue.Path == "$.dimensions[dim-hole-dia]"),
+            $"Injected dimension failure must report $.dimensions[dim-hole-dia], got: {FormatIssues(result.Validation.Issues)}");
+    }
+
+    private static void WriterTransactionBoundaryTreatsCancellationAsNonCommittedRender()
+    {
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(RectangularPlateSample.Create());
+        using var cancellation = new CancellationTokenSource();
+        FakeWriterTransactionScope? scope = null;
+        var boundary = new WriterTransactionBoundary(() =>
+        {
+            scope = new FakeWriterTransactionScope();
+            return scope;
+        });
+
+        var result = boundary.Execute(
+            plan,
+            new WriterRenderOptions(cancellation.Token),
+            (transaction, context) =>
+            {
+                var fakeTransaction = (FakeWriterTransactionScope)transaction;
+                var renderedEntity = new RenderedEntity(plan.Entities[0].SpecEntityId, $"fake:{plan.Entities[0].SpecEntityId}");
+                fakeTransaction.Append(renderedEntity);
+                cancellation.Cancel();
+                context.AfterEntityAppended(plan.Entities[0], renderedEntity);
+                return new[] { renderedEntity };
+            });
+
+        Assert(result.Canceled, "Cancellation must produce a canceled render result.");
+        Assert(!result.Success, "Cancellation must not be reported as success.");
+        Assert(scope != null, "Transaction scope must be created before mid-render cancellation.");
+        Assert(!scope!.CommitCalled, "Cancellation must not commit the transaction.");
+        Assert(scope.Disposed, "Canceled transaction scope must still be disposed.");
+        AssertEqual(0, scope.CommittedEntities.Count);
+        AssertEqual(0, result.Entities.Count);
+        Assert(
+            result.Validation.Issues.Any(issue =>
+                issue.Code == "render_canceled" && issue.Path == "$"),
+            $"Cancellation must report render_canceled at $, got: {FormatIssues(result.Validation.Issues)}");
+    }
+
     private static void ProjectReferencesFollowArchitectureBoundaries()
     {
         var root = FindRepositoryRoot();
@@ -775,6 +894,47 @@ public static class Program
             "AIEXPORT must clearly log when the current ZWCAD environment cannot export PDF.");
     }
 
+    private static void PluginWriterUsesSharedTransactionBoundary()
+    {
+        var source = ReadPluginSource();
+
+        Assert(
+            source.Contains("WriterTransactionBoundary", StringComparison.Ordinal),
+            "ZWCAD writer must delegate transaction commit/rollback policy to the shared writer transaction boundary.");
+        Assert(
+            source.Contains("ZwcadWriterTransactionScope", StringComparison.Ordinal),
+            "ZWCAD writer must isolate DocumentLock and Transaction acquisition in an explicit transaction scope.");
+        Assert(
+            source.Contains("document.LockDocument()", StringComparison.Ordinal)
+                && source.Contains("Database.TransactionManager.StartTransaction()", StringComparison.Ordinal)
+                && source.Contains("Transaction.Commit()", StringComparison.Ordinal),
+            "ZWCAD transaction scope must hold DocumentLock + Transaction and commit only through the scope.");
+        Assert(
+            source.Contains("AppendPlanToModelSpace", StringComparison.Ordinal)
+                && source.Contains("context.AfterEntityAppended", StringComparison.Ordinal)
+                && source.Contains("context.AfterDimensionAppended", StringComparison.Ordinal),
+            "ZWCAD writer must keep all entity and dimension appends inside the shared transaction context.");
+    }
+
+    private static void PluginWriterFailuresLocateStableEntityAndDimensionIds()
+    {
+        var source = ReadPluginSource();
+
+        Assert(
+            source.Contains("CreateEntityFailure", StringComparison.Ordinal)
+                && source.Contains("$.entities[", StringComparison.Ordinal)
+                && source.Contains("plannedEntity.SpecEntityId", StringComparison.Ordinal),
+            "Entity writer failures must locate stable DrawingSpec entity ids.");
+        Assert(
+            source.Contains("CreateDimensionFailure", StringComparison.Ordinal)
+                && source.Contains("$.dimensions[", StringComparison.Ordinal)
+                && source.Contains("plannedDimension.SpecDimensionId", StringComparison.Ordinal),
+            "Dimension writer failures must locate stable DrawingSpec dimension ids.");
+        Assert(
+            source.Contains("render failed and was rolled back", StringComparison.Ordinal),
+            "AIDRAW must report writer failures as rolled-back render results.");
+    }
+
     private static void PluginWriterSupportsP301BasicEntityDispatch()
     {
         var source = ReadPluginSource();
@@ -839,6 +999,72 @@ public static class Program
         Assert(
             source.Contains("[PlannedEntityKind.CenterLine] = CreateLine", StringComparison.Ordinal),
             "ZWCAD writer must render center mark expansions and explicit centerlines through line entities.");
+    }
+
+    private static IReadOnlyList<RenderedEntity> SimulatePlanWrites(
+        IWriterTransactionScope transaction,
+        WriterTransactionContext context)
+    {
+        var fakeTransaction = (FakeWriterTransactionScope)transaction;
+        var renderedEntities = new List<RenderedEntity>();
+
+        foreach (var plannedEntity in context.Plan.Entities)
+        {
+            var renderedEntity = new RenderedEntity(
+                plannedEntity.SpecEntityId,
+                $"fake:{plannedEntity.SpecEntityId}");
+            fakeTransaction.Append(renderedEntity);
+            renderedEntities.Add(renderedEntity);
+            context.AfterEntityAppended(plannedEntity, renderedEntity);
+        }
+
+        foreach (var plannedDimension in context.Plan.Dimensions)
+        {
+            var renderedEntity = new RenderedEntity(
+                plannedDimension.SpecDimensionId,
+                $"fake:{plannedDimension.SpecDimensionId}");
+            fakeTransaction.Append(renderedEntity);
+            renderedEntities.Add(renderedEntity);
+            context.AfterDimensionAppended(plannedDimension, renderedEntity);
+        }
+
+        return renderedEntities;
+    }
+
+    private sealed class FakeWriterTransactionScope : IWriterTransactionScope
+    {
+        private readonly List<RenderedEntity> _pendingEntities = new List<RenderedEntity>();
+        private readonly List<RenderedEntity> _committedEntities = new List<RenderedEntity>();
+
+        public bool CommitCalled { get; private set; }
+
+        public bool Disposed { get; private set; }
+
+        public IReadOnlyList<RenderedEntity> CommittedEntities => _committedEntities;
+
+        public void Append(RenderedEntity renderedEntity)
+        {
+            Assert(!Disposed, "Fake transaction must not accept appends after disposal.");
+            _pendingEntities.Add(renderedEntity);
+        }
+
+        public void Commit()
+        {
+            Assert(!Disposed, "Fake transaction must not commit after disposal.");
+            CommitCalled = true;
+            _committedEntities.AddRange(_pendingEntities);
+            _pendingEntities.Clear();
+        }
+
+        public void Dispose()
+        {
+            if (!CommitCalled)
+            {
+                _pendingEntities.Clear();
+            }
+
+            Disposed = true;
+        }
     }
 
     private static IReadOnlyDictionary<string, PlannedEntityKind> P301BasicEntityKinds()

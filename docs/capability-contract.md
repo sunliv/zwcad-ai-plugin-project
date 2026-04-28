@@ -36,6 +36,7 @@
 - 缺少关键尺寸时必须追问，不能猜测关键工程参数。
 - 写入 DWG 前必须完成校验并给用户确认入口。
 - 每次自动绘制必须在可回滚事务或可 Undo 命令组内完成。
+- 写入取消必须发生在事务提交前；取消结果不得返回正式 CAD 对象映射。
 - 文件保存、导出、覆盖、删除、批量修改必须受路径和权限限制。
 - API Key、模型服务地址和企业标准配置不能写死在源码中。
 - 生产日志不能默认记录敏感图纸全文或完整用户业务数据。
@@ -66,11 +67,12 @@
 | `spec_generated` | AI 已生成 DrawingSpec | `schema_validated`、`rejected` |
 | `schema_validated` | 协议结构合法 | `rules_validated`、`rejected` |
 | `rules_validated` | 业务规则合法 | `preview_ready`、`rejected` |
-| `preview_ready` | 可供用户确认 | `applied_to_dwg`、`draft_request` |
+| `preview_ready` | 可供用户确认 | `applied_to_dwg`、`render_canceled`、`draft_request` |
 | `applied_to_dwg` | 已写入 DWG | `geometry_verified`、`rolled_back` |
 | `geometry_verified` | 几何复核通过 | `exported`、`completed` |
 | `exported` | 已导出交付文件 | `completed` |
 | `rejected` | 校验失败或用户取消 | `draft_request` |
+| `render_canceled` | 用户取消或取消令牌触发，事务未提交 | `draft_request` |
 | `rolled_back` | 写入失败后回滚 | `draft_request` |
 
 ### Interfaces
@@ -107,7 +109,7 @@ AI 服务输出：
 
 - `ValidateSchema(DrawingSpec spec) -> ValidationResult`
 - `ValidateBusinessRules(DrawingSpec spec, CadStandard standard) -> ValidationResult`
-- `Render(DrawingSpec spec, RenderContext context) -> RenderResult`
+- `Render(DrawingSpec spec, RenderContext context) -> RenderResult`，状态为 `Success`、`Failed` 或 `Canceled`
 - `ExtractGeometrySummary(Document document) -> GeometrySummary`
 - `VerifyGeometry(DrawingSpec spec, GeometrySummary summary) -> VerificationResult`
 - `Export(Document document, ExportOptions options) -> ExportResult`
@@ -117,6 +119,7 @@ AI 服务输出：
 - DrawingSpec 需要版本号，后续协议演进必须兼容旧样例。
 - 每个实体应有稳定 `id`，便于错误定位、局部修改和回归测试。
 - 渲染后需要维护 `specEntityId -> cadObjectId` 映射。
+- 失败路径必须使用稳定路径定位到 `$.entities[id]` 或 `$.dimensions[id]`。
 - 企业标准应独立配置：图层、线型、线宽、颜色、文字样式、标注样式、图框、块库。
 - 历史记录应保存输入、规格、校验结果、模型版本、插件版本和输出路径。
 

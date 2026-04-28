@@ -22,9 +22,9 @@ flowchart TD
 
 | Module | Owns | Must Not Own |
 |---|---|---|
-| `ZwcadAiPlugin` | CAD commands, panel, document transaction, user confirmation | AI prompt internals, arbitrary model repair logic |
+| `ZwcadAiPlugin` | CAD commands, panel, ZWCAD document lock/transaction adapter, user confirmation | AI prompt internals, arbitrary model repair logic |
 | `ZwcadAi.Core` | DrawingSpec models, validation result types, domain errors | ZWCAD runtime references |
-| `ZwcadAi.Renderer` | Spec to CAD entities, layers, dimensions, blocks, transactions | Natural language interpretation |
+| `ZwcadAi.Renderer` | Spec planning, writer transaction policy, render result contracts | Natural language interpretation, direct ZWCAD runtime references |
 | `ZwcadAi.AiService` | Model calls, prompt versioning, structured output, retry | Direct DWG mutation |
 | `ZwcadAi.Tests` | Unit tests, regression samples, geometry snapshots | Production secrets |
 | `templates` | Layer, dimension, text style, blocks, title blocks | Runtime business logic |
@@ -55,7 +55,7 @@ flowchart TD
 4. 插件执行 JSON Schema 校验。
 5. 插件执行业务规则校验，例如尺寸范围、图层标准、实体数量限制。
 6. 插件生成预览摘要并等待用户确认。
-7. CAD Renderer 在事务中创建实体。
+7. CAD-facing writer 在单个 DocumentLock + Transaction 中创建实体。
 8. 插件提取几何摘要并复核。
 9. 插件保存审计记录并按需导出。
 
@@ -69,7 +69,7 @@ flowchart TD
 | 业务规则不通过 | 显示违反规则，不进入渲染 |
 | 渲染异常 | 回滚事务，保留错误日志 |
 | 导出失败 | 保留 DWG 状态，显示目标路径和原因 |
-| 用户取消 | 不写入或撤销临时实体 |
+| 用户取消 | 不提交事务，不返回正式 `RenderedEntity` 映射 |
 
 ## Stability Rules
 
@@ -78,4 +78,3 @@ flowchart TD
 - 模型输出不能被当作代码执行。
 - 渲染器不能依赖 UI 焦点、命令行提示或窗口坐标。
 - 单次请求必须设置实体数量、坐标范围和运行时间上限。
-

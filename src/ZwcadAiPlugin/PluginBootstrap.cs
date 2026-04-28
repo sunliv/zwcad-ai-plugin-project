@@ -57,11 +57,25 @@ public sealed class PluginCommands
                 return;
             }
 
-            var renderedEntities = new ZwcadDrawingWriter().Render(plan);
+            var renderResult = new ZwcadDrawingWriter().Render(plan);
+            if (renderResult.Canceled)
+            {
+                CadLog.WriteInfo($"{status.Command} render canceled before committing CAD entities.");
+                return;
+            }
+
+            if (!renderResult.Success)
+            {
+                var errors = string.Join(
+                    "; ",
+                    renderResult.Validation.Issues.Select(issue => $"{issue.Code} at {issue.Path}: {issue.Message}"));
+                CadLog.WriteInfo($"{status.Command} render failed and was rolled back: {errors}");
+                return;
+            }
 
             CadLog.WriteInfo(
                 $"{status.Product}: {status.Command} rendered fixed {status.Domain} POC sample "
-                + $"'{spec.Metadata.RequestId}' with {renderedEntities.Count} CAD entities.");
+                + $"'{spec.Metadata.RequestId}' with {renderResult.Entities.Count} CAD entities.");
         }
         catch (System.Exception exception)
         {

@@ -24,52 +24,102 @@ public sealed class ZwcadDrawingWriter
             [PlannedEntityKind.MText] = CreateMText
         };
 
-    public IReadOnlyList<RenderedEntity> Render(DrawingRenderPlan plan)
+    public RenderResult Render(DrawingRenderPlan plan)
+    {
+        return Render(plan, WriterRenderOptions.Default);
+    }
+
+    public RenderResult Render(DrawingRenderPlan plan, WriterRenderOptions? options)
     {
         if (plan == null)
         {
             throw new ArgumentNullException(nameof(plan));
         }
 
-        if (!plan.Validation.IsValid)
-        {
-            throw new InvalidOperationException("Cannot render an invalid DrawingSpec plan.");
-        }
+        var transactionBoundary = new WriterTransactionBoundary(CreateTransactionScope);
+        return transactionBoundary.Execute(plan, options, AppendPlanToModelSpace);
+    }
 
+    private static IWriterTransactionScope CreateTransactionScope()
+    {
         var document = Application.DocumentManager?.MdiActiveDocument
             ?? throw new InvalidOperationException("No active ZWCAD document is available.");
         var database = document.Database
             ?? throw new InvalidOperationException("No active ZWCAD database is available.");
 
+        return new ZwcadWriterTransactionScope(document, database);
+    }
+
+    private static IReadOnlyList<RenderedEntity> AppendPlanToModelSpace(
+        IWriterTransactionScope transactionScope,
+        WriterTransactionContext context)
+    {
+        var zwcadTransaction = transactionScope as ZwcadWriterTransactionScope
+            ?? throw new InvalidOperationException("ZWCAD writer received an unexpected transaction scope.");
+        var database = zwcadTransaction.Database;
+        var transaction = zwcadTransaction.Transaction;
+        var plan = context.Plan;
         var renderedEntities = new List<RenderedEntity>();
 
-        using (document.LockDocument())
-        using (var transaction = database.TransactionManager.StartTransaction())
+        EnsureLayers(database, transaction, plan.Layers);
+
+        var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
+        var modelSpace = (BlockTableRecord)transaction.GetObject(
+            blockTable[BlockTableRecord.ModelSpace],
+            OpenMode.ForWrite);
+
+        foreach (var plannedEntity in plan.Entities)
         {
-            EnsureLayers(database, transaction, plan.Layers);
+            context.ThrowIfCancellationRequested();
 
-            var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
-            var modelSpace = (BlockTableRecord)transaction.GetObject(
-                blockTable[BlockTableRecord.ModelSpace],
-                OpenMode.ForWrite);
-
-            foreach (var plannedEntity in plan.Entities)
+            try
             {
                 var cadEntity = CreateCadEntity(plannedEntity);
                 var objectId = modelSpace.AppendEntity(cadEntity);
                 transaction.AddNewlyCreatedDBObject(cadEntity, true);
-                renderedEntities.Add(new RenderedEntity(plannedEntity.SpecEntityId, objectId.ToString()));
+                var renderedEntity = new RenderedEntity(plannedEntity.SpecEntityId, objectId.ToString());
+                renderedEntities.Add(renderedEntity);
+                context.AfterEntityAppended(plannedEntity, renderedEntity);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (WriterRenderException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                throw WriterRenderException.ForEntity(plannedEntity, exception.Message);
+            }
+        }
 
-            foreach (var plannedDimension in plan.Dimensions)
+        foreach (var plannedDimension in plan.Dimensions)
+        {
+            context.ThrowIfCancellationRequested();
+
+            try
             {
                 var cadDimension = CreateCadDimension(database, plan, plannedDimension);
                 var objectId = modelSpace.AppendEntity(cadDimension);
                 transaction.AddNewlyCreatedDBObject(cadDimension, true);
-                renderedEntities.Add(new RenderedEntity(plannedDimension.SpecDimensionId, objectId.ToString()));
+                var renderedEntity = new RenderedEntity(plannedDimension.SpecDimensionId, objectId.ToString());
+                renderedEntities.Add(renderedEntity);
+                context.AfterDimensionAppended(plannedDimension, renderedEntity);
             }
-
-            transaction.Commit();
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (WriterRenderException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                throw WriterRenderException.ForDimension(plannedDimension, exception.Message);
+            }
         }
 
         return renderedEntities;
@@ -110,8 +160,9 @@ public sealed class ZwcadDrawingWriter
     {
         if (!EntityFactories.TryGetValue(plannedEntity.Kind, out var factory))
         {
-            throw new NotSupportedException(
-                $"Planned entity '{plannedEntity.SpecEntityId}' has unsupported kind '{plannedEntity.Kind}'.");
+            throw CreateEntityFailure(
+                plannedEntity,
+                $"Unsupported entity kind '{plannedEntity.Kind}'.");
         }
 
         var cadEntity = factory(plannedEntity);
@@ -123,7 +174,7 @@ public sealed class ZwcadDrawingWriter
     {
         if (plannedEntity.Points.Count < 2)
         {
-            throw new InvalidOperationException($"Polyline '{plannedEntity.SpecEntityId}' has fewer than two points.");
+            throw CreateEntityFailure(plannedEntity, "Polyline has fewer than two points.");
         }
 
         var polyline = new Polyline(plannedEntity.Points.Count)
@@ -143,7 +194,7 @@ public sealed class ZwcadDrawingWriter
     {
         if (plannedEntity.Center == null || plannedEntity.Radius <= 0)
         {
-            throw new InvalidOperationException($"Circle '{plannedEntity.SpecEntityId}' has invalid geometry.");
+            throw CreateEntityFailure(plannedEntity, "Circle has invalid geometry.");
         }
 
         return new Circle(ToPoint3d(plannedEntity.Center), Vector3d.ZAxis, plannedEntity.Radius);
@@ -153,7 +204,7 @@ public sealed class ZwcadDrawingWriter
     {
         if (plannedEntity.Start == null || plannedEntity.End == null)
         {
-            throw new InvalidOperationException($"Line '{plannedEntity.SpecEntityId}' has invalid geometry.");
+            throw CreateEntityFailure(plannedEntity, "Line has invalid geometry.");
         }
 
         return new Line(ToPoint3d(plannedEntity.Start), ToPoint3d(plannedEntity.End));
@@ -163,7 +214,7 @@ public sealed class ZwcadDrawingWriter
     {
         if (plannedEntity.Center == null || plannedEntity.Radius <= 0)
         {
-            throw new InvalidOperationException($"Arc '{plannedEntity.SpecEntityId}' has invalid geometry.");
+            throw CreateEntityFailure(plannedEntity, "Arc has invalid geometry.");
         }
 
         return new Arc(
@@ -178,7 +229,7 @@ public sealed class ZwcadDrawingWriter
     {
         if (plannedEntity.Position == null || plannedEntity.Height <= 0)
         {
-            throw new InvalidOperationException($"Text entity '{plannedEntity.SpecEntityId}' has invalid geometry.");
+            throw CreateEntityFailure(plannedEntity, "Text entity has invalid geometry.");
         }
 
         return new DBText
@@ -194,7 +245,7 @@ public sealed class ZwcadDrawingWriter
     {
         if (plannedEntity.Position == null || plannedEntity.Height <= 0)
         {
-            throw new InvalidOperationException($"MText entity '{plannedEntity.SpecEntityId}' has invalid geometry.");
+            throw CreateEntityFailure(plannedEntity, "MText entity has invalid geometry.");
         }
 
         return new MText
@@ -358,10 +409,16 @@ public sealed class ZwcadDrawingWriter
         return new Point3d(anchor.X + offset.X, anchor.Y + offset.Y, 0);
     }
 
-    private static InvalidOperationException CreateDimensionFailure(PlannedDimension plannedDimension, string message)
+    private static WriterRenderException CreateEntityFailure(PlannedEntity plannedEntity, string message)
     {
-        return new InvalidOperationException(
-            $"Dimension '$.dimensions[{plannedDimension.SpecDimensionId}]' failed to render: {message}");
+        var path = $"$.entities[{plannedEntity.SpecEntityId}]";
+        return new WriterRenderException("entity_render_failed", path, $"Entity '{path}' failed to render: {message}");
+    }
+
+    private static WriterRenderException CreateDimensionFailure(PlannedDimension plannedDimension, string message)
+    {
+        var path = $"$.dimensions[{plannedDimension.SpecDimensionId}]";
+        return new WriterRenderException("dimension_render_failed", path, $"Dimension '{path}' failed to render: {message}");
     }
 
     private static double ToRadians(double degrees)
@@ -392,5 +449,37 @@ public sealed class ZwcadDrawingWriter
         }
 
         return LineWeight.ByLayer;
+    }
+
+    private sealed class ZwcadWriterTransactionScope : IWriterTransactionScope
+    {
+        private readonly IDisposable _documentLock;
+
+        public ZwcadWriterTransactionScope(Document document, Database database)
+        {
+            if (document == null)
+            {
+                throw new ArgumentNullException(nameof(document));
+            }
+
+            Database = database ?? throw new ArgumentNullException(nameof(database));
+            _documentLock = document.LockDocument();
+            Transaction = Database.TransactionManager.StartTransaction();
+        }
+
+        public Database Database { get; }
+
+        public Transaction Transaction { get; }
+
+        public void Commit()
+        {
+            Transaction.Commit();
+        }
+
+        public void Dispose()
+        {
+            Transaction.Dispose();
+            _documentLock.Dispose();
+        }
     }
 }

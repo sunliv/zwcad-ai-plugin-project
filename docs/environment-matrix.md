@@ -143,6 +143,29 @@ AIEXPORT PDF: C:\Users\chenguang\Documents\ZwcadAiExports\Drawing1-aiexport-2026
 
 A non-interactive `Database` construction attempt outside the ZWCAD process previously crashed in unmanaged ZWCAD code with an access violation, so CAD-process execution is the validation source of truth for this export path.
 
+## P3-03 Transaction And Rollback Evidence
+
+Date: 2026-04-28
+
+Implemented and build/test verified against the local source baseline:
+
+- CAD writes now enter a shared writer transaction boundary before any entity or dimension append.
+- The ZWCAD adapter holds `DocumentLock` and one database `Transaction` for the full layer/entity/dimension write.
+- The writer commits only after all entities, dimensions, cancellation checks, and failure-injection checks complete.
+- Entity writer failures resolve to stable paths such as `$.entities[relief-arc]`.
+- Dimension writer failures resolve to stable paths such as `$.dimensions[dim-angle-between-edges]`.
+- Failure injection supports after-entity, after-dimension, and before-commit checkpoints.
+- Automated fake-transaction tests verify that injected entity failures, injected dimension failures, and cancellation do not commit or return CAD object mappings.
+- Cancellation is represented as `RenderStatus.Canceled` and `render_canceled` at `$`; it is not treated as a partial success.
+
+Manual ZWCAD Undo validation completed in the ZWCAD 2025 CAD process:
+
+- Rebuilt `src\ZwcadAiPlugin\bin\x64\Debug\net48\ZwcadAiPlugin.dll`.
+- Loaded the rebuilt DLL with `NETLOAD`.
+- Ran `AIDRAW` to create the automatic DrawingSpec output.
+- Ran one `UNDO` operation.
+- Confirmed the generated automatic drawing content was removed successfully in one undo step.
+
 ## Open Environment Gaps
 
 - ZWCAD 2026 and Windows 10 compatibility validation remain pending for later compatibility work.

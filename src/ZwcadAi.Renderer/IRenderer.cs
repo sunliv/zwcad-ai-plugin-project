@@ -24,17 +24,33 @@ public sealed class RenderContext
 public sealed class RenderResult
 {
     public RenderResult(bool success, IReadOnlyList<RenderedEntity> entities, ValidationResult validation)
+        : this(success ? RenderStatus.Success : RenderStatus.Failed, entities, validation)
     {
-        Success = success;
+    }
+
+    public RenderResult(RenderStatus status, IReadOnlyList<RenderedEntity> entities, ValidationResult validation)
+    {
+        Status = status;
         Entities = entities;
         Validation = validation;
     }
 
-    public bool Success { get; }
+    public RenderStatus Status { get; }
+
+    public bool Success => Status == RenderStatus.Success;
+
+    public bool Canceled => Status == RenderStatus.Canceled;
 
     public IReadOnlyList<RenderedEntity> Entities { get; }
 
     public ValidationResult Validation { get; }
+}
+
+public enum RenderStatus
+{
+    Success,
+    Failed,
+    Canceled
 }
 
 public sealed class RenderedEntity
