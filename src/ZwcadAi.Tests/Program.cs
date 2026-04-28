@@ -19,6 +19,18 @@ public static class Program
         {
             ("Core uses the locked MVP domain", CoreUsesLockedMvpDomain),
             ("AI request defaults to P4 model prompt contract", AiRequestDefaultsToP4ModelPromptContract),
+            ("Local AI adapter accepts JSON-only DrawingSpec responses", LocalAiAdapterAcceptsJsonOnlyDrawingSpecResponses),
+            ("Local AI adapter rejects non-JSON model responses", LocalAiAdapterRejectsNonJsonModelResponses),
+            ("Local AI adapter rejects Markdown fenced model responses", LocalAiAdapterRejectsMarkdownFencedModelResponses),
+            ("Local AI adapter rejects unsafe CAD command responses", LocalAiAdapterRejectsUnsafeCadCommandResponses),
+            ("Local AI adapter allows command-like words inside JSON text", LocalAiAdapterAllowsCommandLikeWordsInsideJsonText),
+            ("Local AI adapter maps clarification responses", LocalAiAdapterMapsClarificationResponses),
+            ("Local AI adapter maps schema validation issues as repairable", LocalAiAdapterMapsSchemaValidationIssuesAsRepairable),
+            ("Local AI adapter maps business validation issues as repairable", LocalAiAdapterMapsBusinessValidationIssuesAsRepairable),
+            ("Local AI adapter maps timeout failures as non-repairable", LocalAiAdapterMapsTimeoutFailuresAsNonRepairable),
+            ("Local AI adapter maps service failures as non-repairable", LocalAiAdapterMapsServiceFailuresAsNonRepairable),
+            ("Local AI adapter enforces repair attempt limit", LocalAiAdapterEnforcesRepairAttemptLimit),
+            ("Local AI adapter rejects invalid repair attempt numbers", LocalAiAdapterRejectsInvalidRepairAttemptNumbers),
             ("Fixed rectangular plate sample matches P1-03 geometry", FixedRectangularPlateSampleMatchesP103Geometry),
             ("DrawingSpec schema accepts valid example files", DrawingSpecSchemaAcceptsValidExampleFiles),
             ("Basic entities combo example validates and plans P3-01 entities", BasicEntitiesComboExampleValidatesAndPlansP301Entities),
@@ -118,6 +130,295 @@ public static class Program
         AssertEqual(1, repairRequest.RepairAttempt);
         AssertEqual(ModelPromptContract.MaxRepairAttempts, repairRequest.MaxRepairAttempts);
         AssertEqual(1, repairRequest.Issues.Count);
+    }
+
+    private static void LocalAiAdapterAcceptsJsonOnlyDrawingSpecResponses()
+    {
+        var json = MinimalSpecJson("""
+            {
+              "id": "adapter-line",
+              "type": "line",
+              "layer": "OUTLINE",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        var adapter = new LocalAiDrawingSpecAdapter(new StaticAiModelClient(json));
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-json-only" });
+
+        AssertEqual(AiDrawingSpecResponseKind.DrawingSpec, response.Kind);
+        Assert(response.Spec != null, "Valid JSON-only DrawingSpec response must include a parsed spec.");
+        AssertEqual(json, response.DrawingSpecJson);
+        Assert(response.Validation.IsValid, $"Valid JSON-only DrawingSpec response should pass validation: {FormatIssues(response.Validation.Issues)}");
+        AssertEqual("adapter-line", response.Spec!.Entities.Single().Id);
+    }
+
+    private static void LocalAiAdapterRejectsNonJsonModelResponses()
+    {
+        var adapter = new LocalAiDrawingSpecAdapter(new StaticAiModelClient("Here is the drawing specification."));
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-non-json" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.ModelResponseNotJson
+                && issue.Source == AiModelIssueSource.ModelResponse
+                && !issue.Repairable),
+            $"Non-JSON model response must be rejected as non-repairable model output: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterRejectsMarkdownFencedModelResponses()
+    {
+        var json = MinimalSpecJson("""
+            {
+              "id": "fenced-line",
+              "type": "line",
+              "layer": "OUTLINE",
+              "start": [0, 0],
+              "end": [25, 0]
+            }
+            """);
+        var adapter = new LocalAiDrawingSpecAdapter(new StaticAiModelClient($"```json{Environment.NewLine}{json}{Environment.NewLine}```"));
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-fenced" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.ModelResponseNotJson),
+            $"Markdown fenced output must fail the JSON-only adapter boundary: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterRejectsUnsafeCadCommandResponses()
+    {
+        var adapter = new LocalAiDrawingSpecAdapter(new StaticAiModelClient("(command \"LINE\" \"0,0\" \"100,0\" \"\")"));
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-command" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.UnsafeCadCommand
+                && issue.Source == AiModelIssueSource.ModelResponse
+                && !issue.Repairable),
+            $"Free CAD commands must be rejected before any DrawingSpec parsing: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterAllowsCommandLikeWordsInsideJsonText()
+    {
+        var json = MinimalSpecJson("""
+            {
+              "id": "safe-text-line",
+              "type": "line",
+              "layer": "OUTLINE",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """).Replace(
+                "\"schema validation test\"",
+                "\"PowerShell shell LISP reference note\"");
+        var adapter = new LocalAiDrawingSpecAdapter(new StaticAiModelClient(json));
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-safe-json-text" });
+
+        AssertEqual(AiDrawingSpecResponseKind.DrawingSpec, response.Kind);
+        Assert(response.Validation.IsValid, $"Command-like words inside JSON text should not be treated as executable output: {FormatIssues(response.Validation.Issues)}");
+    }
+
+    private static void LocalAiAdapterMapsClarificationResponses()
+    {
+        var adapter = new LocalAiDrawingSpecAdapter(new StaticAiModelClient("""
+            {
+              "drawingSpecVersion": "1.0",
+              "units": "mm",
+              "metadata": {
+                "title": "clarification test",
+                "domain": "mechanical_plate",
+                "createdBy": "test",
+                "requestId": "adapter-clarification"
+              },
+              "layers": [
+                { "name": "OUTLINE", "color": 7, "lineType": "Continuous", "lineWeight": 0.35 }
+              ],
+              "entities": [],
+              "dimensions": [],
+              "clarifications": [
+                "Please provide the rectangular plate width.",
+                "Please provide the rectangular plate height."
+              ]
+            }
+            """));
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-clarification" });
+
+        AssertEqual(AiDrawingSpecResponseKind.NeedsClarification, response.Kind);
+        AssertEqual(2, response.Clarifications.Count);
+        AssertEqual("Please provide the rectangular plate width.", response.Clarifications[0]);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.NeedsClarification
+                && issue.Source == AiModelIssueSource.UserClarification
+                && !issue.Repairable),
+            $"Clarification response must include a stable non-repair issue: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterMapsSchemaValidationIssuesAsRepairable()
+    {
+        var json = MinimalSpecJson("""
+            {
+              "id": "missing-layer",
+              "type": "line",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """);
+        var adapter = new LocalAiDrawingSpecAdapter(new StaticAiModelClient(json));
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-schema-invalid" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        Assert(
+            response.Issues.Any(issue => issue.Code == "missing_required"
+                && issue.Path == "$.entities[0].layer"
+                && issue.Source == AiModelIssueSource.SchemaValidation
+                && issue.Repairable),
+            $"Repairable schema issues must be mapped into stable AI model issues: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterMapsBusinessValidationIssuesAsRepairable()
+    {
+        var adapter = new LocalAiDrawingSpecAdapter(new StaticAiModelClient("""
+            {
+              "drawingSpecVersion": "1.0",
+              "units": "mm",
+              "metadata": {
+                "title": "business validation test",
+                "domain": "mechanical_plate",
+                "createdBy": "test",
+                "requestId": "adapter-business-invalid"
+              },
+              "layers": [
+                { "name": "OUTLINE", "color": 7, "lineType": "Continuous", "lineWeight": 0.35 }
+              ],
+              "entities": [
+                {
+                  "id": "business-line",
+                  "type": "line",
+                  "layer": "OUTLINE",
+                  "start": [0, 0],
+                  "end": [100, 0]
+                }
+              ],
+              "dimensions": [],
+              "clarifications": []
+            }
+            """));
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-business-invalid" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        Assert(
+            response.Issues.Any(issue => issue.Code == "missing_required_layer"
+                && issue.Path == "$.layers[CENTER]"
+                && issue.Source == AiModelIssueSource.BusinessValidation
+                && issue.Repairable),
+            $"Repairable business issues must be mapped into stable AI model issues: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterMapsTimeoutFailuresAsNonRepairable()
+    {
+        var modelClient = new ThrowingAiModelClient(new TimeoutException("slow model"));
+        var adapter = new LocalAiDrawingSpecAdapter(
+            modelClient,
+            new LocalAiServiceOptions { MaxRetries = 2 });
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-timeout" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        AssertEqual(3, modelClient.DrawingSpecCalls);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.ModelServiceTimeout
+                && issue.Source == AiModelIssueSource.Service
+                && !issue.Repairable),
+            $"Service timeout must be a non-repairable service issue after bounded retry: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterMapsServiceFailuresAsNonRepairable()
+    {
+        var modelClient = new ThrowingAiModelClient(new InvalidOperationException("bad endpoint"));
+        var adapter = new LocalAiDrawingSpecAdapter(
+            modelClient,
+            new LocalAiServiceOptions { MaxRetries = 2 });
+
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest { RequestId = "adapter-service-failure" });
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        AssertEqual(1, modelClient.DrawingSpecCalls);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.ModelServiceFailed
+                && issue.Source == AiModelIssueSource.Service
+                && !issue.Repairable),
+            $"Service failure must be a non-repairable service issue: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterEnforcesRepairAttemptLimit()
+    {
+        var modelClient = new StaticAiModelClient(MinimalSpecJson("""
+            {
+              "id": "should-not-run",
+              "type": "line",
+              "layer": "OUTLINE",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """));
+        var adapter = new LocalAiDrawingSpecAdapter(modelClient);
+        var request = new AiDrawingSpecRepairRequest
+        {
+            InvalidDrawingSpecJson = "{\"entities\":[]}",
+            RepairAttempt = ModelPromptContract.MaxRepairAttempts + 1,
+            MaxRepairAttempts = ModelPromptContract.MaxRepairAttempts
+        };
+
+        var response = adapter.RepairDrawingSpec(request);
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        AssertEqual(0, modelClient.DrawingSpecCalls);
+        AssertEqual(0, modelClient.RepairCalls);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.RepairAttemptLimitExceeded
+                && issue.Source == AiModelIssueSource.Service
+                && !issue.Repairable),
+            $"Repair attempt limit must return a stable service issue without calling the model: {FormatModelIssues(response.Issues)}");
+    }
+
+    private static void LocalAiAdapterRejectsInvalidRepairAttemptNumbers()
+    {
+        var modelClient = new StaticAiModelClient(MinimalSpecJson("""
+            {
+              "id": "should-not-run-invalid-attempt",
+              "type": "line",
+              "layer": "OUTLINE",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """));
+        var adapter = new LocalAiDrawingSpecAdapter(modelClient);
+        var request = new AiDrawingSpecRepairRequest
+        {
+            InvalidDrawingSpecJson = "{\"entities\":[]}",
+            RepairAttempt = 0,
+            MaxRepairAttempts = ModelPromptContract.MaxRepairAttempts
+        };
+
+        var response = adapter.RepairDrawingSpec(request);
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, response.Kind);
+        AssertEqual(0, modelClient.DrawingSpecCalls);
+        AssertEqual(0, modelClient.RepairCalls);
+        Assert(
+            response.Issues.Any(issue => issue.Code == AiIssueCodes.InvalidRepairAttempt
+                && issue.Source == AiModelIssueSource.Service
+                && !issue.Repairable),
+            $"Invalid repair attempt numbers must return a stable service issue without calling the model: {FormatModelIssues(response.Issues)}");
     }
 
     private static void FixedRectangularPlateSampleMatchesP103Geometry()
@@ -1636,12 +1937,71 @@ public static class Program
             issues.Select(issue => $"{issue.Code} at {issue.Path}: {issue.Message}"));
     }
 
+    private static string FormatModelIssues(IEnumerable<AiModelIssue> issues)
+    {
+        return string.Join(
+            "; ",
+            issues.Select(issue => $"{issue.Code} from {issue.Source} at {issue.Path}: {issue.Message}"));
+    }
+
     private static void AssertSequenceEqual<T>(IReadOnlyList<T> expected, IReadOnlyList<T> actual)
     {
         if (!expected.SequenceEqual(actual))
         {
             throw new InvalidOperationException(
                 $"Expected sequence [{string.Join(", ", expected)}], got [{string.Join(", ", actual)}].");
+        }
+    }
+
+    private sealed class StaticAiModelClient : IAiModelClient
+    {
+        private readonly string _rawResponse;
+
+        public StaticAiModelClient(string rawResponse)
+        {
+            _rawResponse = rawResponse;
+        }
+
+        public int DrawingSpecCalls { get; private set; }
+
+        public int RepairCalls { get; private set; }
+
+        public string CreateDrawingSpec(AiDrawingSpecRequest request, AiModelCallOptions options)
+        {
+            DrawingSpecCalls++;
+            return _rawResponse;
+        }
+
+        public string RepairDrawingSpec(AiDrawingSpecRepairRequest request, AiModelCallOptions options)
+        {
+            RepairCalls++;
+            return _rawResponse;
+        }
+    }
+
+    private sealed class ThrowingAiModelClient : IAiModelClient
+    {
+        private readonly Exception _exception;
+
+        public ThrowingAiModelClient(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        public int DrawingSpecCalls { get; private set; }
+
+        public int RepairCalls { get; private set; }
+
+        public string CreateDrawingSpec(AiDrawingSpecRequest request, AiModelCallOptions options)
+        {
+            DrawingSpecCalls++;
+            throw _exception;
+        }
+
+        public string RepairDrawingSpec(AiDrawingSpecRepairRequest request, AiModelCallOptions options)
+        {
+            RepairCalls++;
+            throw _exception;
         }
     }
 }

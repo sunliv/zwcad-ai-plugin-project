@@ -206,6 +206,24 @@ Implemented and build/test verified against the local source baseline:
 - Automated verification: `dotnet .\src\ZwcadAi.Tests\bin\x64\Debug\net8.0\ZwcadAi.Tests.dll` passed 44 tests.
 - Build verification: `dotnet build ZwcadAi.sln -p:Platform=x64` passed and compiled `ZwcadAiPlugin.dll`.
 
+## P4-02 Local AI Service Adapter Evidence
+
+Date: 2026-04-28
+
+Implemented and build/test verified against the local source baseline:
+
+- Added a deterministic `LocalAiDrawingSpecAdapter` behind `IAiDrawingSpecService`; it consumes raw model-client text and maps it to `AiDrawingSpecResponseKind.DrawingSpec`, `NeedsClarification`, or `Rejected`.
+- Added a local `IAiModelClient` seam and `LocalAiServiceOptions`/`AiModelCallOptions` skeleton for timeout, bounded retry, endpoint, API-key environment variable name, and default non-sensitive logging behavior.
+- The adapter enforces JSON-only DrawingSpec root-object output; non-JSON and Markdown fenced responses are rejected before schema/business validation.
+- Free CAD commands or script-like non-JSON output are rejected as `unsafe_cad_command`; valid DrawingSpec JSON text content is not treated as executable output.
+- Model timeout and service failures map to non-repairable service issues after bounded retry handling.
+- Schema and business validation failures are mapped to stable `AiModelIssue` values with `SchemaValidation` or `BusinessValidation` sources and repairability derived from `ModelPromptContract`.
+- Clarification JSON with non-empty `clarifications` maps to `NeedsClarification`; the full UI follow-up workflow remains P5/P4 follow-on work.
+- Repair calls enforce valid attempt numbers and the configured max repair attempts before calling the model client; the full P4-03 repair loop is still pending.
+- P3 lightweight regression boundary remains fixed: the original 44-test AIDRAW/layer/linetype/text/dimension baseline still passes. P4-02 adds 12 local adapter tests, for 56 tests total in the combined harness.
+- Automated verification: `dotnet .\src\ZwcadAi.Tests\bin\x64\Debug\net8.0\ZwcadAi.Tests.dll` passed 56 tests.
+- Build verification: `dotnet build src\ZwcadAi.Tests\ZwcadAi.Tests.csproj -p:Platform=x64 -t:Rebuild` passed with 0 warnings and 0 errors.
+
 ## Open Environment Gaps
 
 - ZWCAD 2026 and Windows 10 compatibility validation remain pending for later compatibility work.

@@ -29,21 +29,21 @@
 
 ## AI
 
-- [ ] AI 输出限定为 DrawingSpec。
-- [ ] 已有 JSON Schema。
-- [ ] 已有缺参追问策略。
-- [ ] 已有失败重试策略。
+- [x] AI 输出限定为 DrawingSpec（P4-02 本地 adapter 执行 JSON-only 边界，clarification 映射为独立响应类型）。
+- [x] 已有 JSON Schema。
+- [x] 已有缺参追问策略（P4-01 合同和 P4-02 adapter 映射已覆盖；UI 追问流程未完成）。
+- [ ] 已有失败重试策略（P4-02 已有 adapter options、基础 timeout retry seam 和 repair attempt guard；真实 provider timeout/retry/cancellation policy 仍未完成）。
 - [ ] 已有模型调用日志策略。
-- [ ] 已明确云端、私有网关或本地模型路线。
+- [x] 已明确云端、私有网关或本地模型路线（P4-02 优先本地 adapter/client seam，后续可挂 HTTP、本地模型或私有网关 provider）。
 
 ## Security
 
-- [ ] 不执行 AI 返回的任意代码。
-- [ ] API Key 不写入源码。
+- [x] 不执行 AI 返回的任意代码（P4-02 adapter 拒绝自由 CAD 命令和脚本式输出）。
+- [x] API Key 不写入源码（P4-02 只保留外部配置/env var seam，未硬编码密钥）。
 - [ ] 文件保存路径受限制或需要用户确认。
-- [ ] 不默认上传完整 DWG。
+- [x] 不默认上传完整 DWG（P4-02 adapter 请求边界不接收 DWG 内容）。
 - [ ] 生产日志默认脱敏。
-- [ ] 外部服务失败时不修改 DWG。
+- [x] 外部服务失败时不修改 DWG（`ZwcadAi.AiService` 只返回 rejected issue，不拥有 DWG mutation）。
 
 ## Verification
 

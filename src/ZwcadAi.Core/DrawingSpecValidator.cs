@@ -219,7 +219,203 @@ public static class DrawingSpecValidator
         return ToValidationResult(issues);
     }
 
+    public static bool TryReadSchemaJson(string json, out DrawingSpec? spec, out ValidationResult validation)
+    {
+        validation = ValidateSchemaJson(json);
+        if (!validation.IsValid)
+        {
+            spec = null;
+            return false;
+        }
+
+        try
+        {
+            spec = ReadDrawingSpec(JsonParser.Parse(json));
+            return true;
+        }
+        catch (JsonParseException exception)
+        {
+            spec = null;
+            validation = ValidationResult.Failure(new[]
+            {
+                new ValidationIssue("invalid_json", "$", exception.Message, ValidationSeverity.Error)
+            });
+            return false;
+        }
+    }
+
     public static IReadOnlyList<string> AllowedLayerNames => CadLayerStandards.Definitions.Keys.ToArray();
+
+    private static DrawingSpec ReadDrawingSpec(JsonValue root)
+    {
+        return new DrawingSpec
+        {
+            DrawingSpecVersion = ReadString(root, "drawingSpecVersion"),
+            Units = ReadString(root, "units"),
+            Metadata = GetProperty(root, "metadata") is JsonValue metadata
+                ? ReadMetadata(metadata)
+                : new DrawingMetadata(),
+            Layers = ReadLayers(root),
+            Entities = ReadEntities(root),
+            Dimensions = ReadDimensions(root),
+            Clarifications = ReadStringArray(root, "clarifications")
+        };
+    }
+
+    private static DrawingMetadata ReadMetadata(JsonValue metadata)
+    {
+        return new DrawingMetadata
+        {
+            Title = ReadString(metadata, "title"),
+            Domain = ReadString(metadata, "domain"),
+            Author = ReadString(metadata, "author"),
+            CreatedBy = ReadString(metadata, "createdBy"),
+            RequestId = ReadString(metadata, "requestId")
+        };
+    }
+
+    private static IReadOnlyList<LayerSpec> ReadLayers(JsonValue root)
+    {
+        var layers = GetProperty(root, "layers");
+        if (layers == null || layers.Kind != JsonValueKind.Array)
+        {
+            return Array.Empty<LayerSpec>();
+        }
+
+        return layers.ArrayItems
+            .Select(layer => new LayerSpec
+            {
+                Name = ReadString(layer, "name"),
+                Color = ReadInt(layer, "color"),
+                LineType = ReadString(layer, "lineType"),
+                LineWeight = ReadDouble(layer, "lineWeight")
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<EntitySpec> ReadEntities(JsonValue root)
+    {
+        var entities = GetProperty(root, "entities");
+        if (entities == null || entities.Kind != JsonValueKind.Array)
+        {
+            return Array.Empty<EntitySpec>();
+        }
+
+        return entities.ArrayItems
+            .Select(entity => new EntitySpec
+            {
+                Id = ReadString(entity, "id"),
+                Type = ReadString(entity, "type"),
+                Layer = ReadString(entity, "layer"),
+                Closed = ReadBoolean(entity, "closed"),
+                Points = ReadPointArray(entity, "points"),
+                Start = ReadPoint(entity, "start"),
+                End = ReadPoint(entity, "end"),
+                Center = ReadPoint(entity, "center"),
+                Position = ReadPoint(entity, "position"),
+                Radius = ReadDouble(entity, "radius"),
+                Size = ReadDouble(entity, "size"),
+                StartAngle = ReadDouble(entity, "startAngle"),
+                EndAngle = ReadDouble(entity, "endAngle"),
+                Value = ReadString(entity, "value"),
+                Height = ReadDouble(entity, "height"),
+                Rotation = ReadDouble(entity, "rotation")
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<DimensionSpec> ReadDimensions(JsonValue root)
+    {
+        var dimensions = GetProperty(root, "dimensions");
+        if (dimensions == null || dimensions.Kind != JsonValueKind.Array)
+        {
+            return Array.Empty<DimensionSpec>();
+        }
+
+        return dimensions.ArrayItems
+            .Select(dimension => new DimensionSpec
+            {
+                Id = ReadString(dimension, "id"),
+                Type = ReadString(dimension, "type"),
+                Layer = ReadString(dimension, "layer"),
+                From = ReadPoint(dimension, "from"),
+                To = ReadPoint(dimension, "to"),
+                Center = ReadPoint(dimension, "center"),
+                TargetEntityId = ReadString(dimension, "targetEntityId"),
+                Offset = ReadPoint(dimension, "offset"),
+                Text = ReadString(dimension, "text")
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> ReadStringArray(JsonValue obj, string propertyName)
+    {
+        var values = GetProperty(obj, propertyName);
+        if (values == null || values.Kind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        return values.ArrayItems
+            .Where(value => value.Kind == JsonValueKind.String)
+            .Select(value => value.StringValue)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<DrawingPoint> ReadPointArray(JsonValue obj, string propertyName)
+    {
+        var values = GetProperty(obj, propertyName);
+        if (values == null || values.Kind != JsonValueKind.Array)
+        {
+            return Array.Empty<DrawingPoint>();
+        }
+
+        return values.ArrayItems
+            .Select(ReadPoint)
+            .Where(point => point != null)
+            .Select(point => point!)
+            .ToArray();
+    }
+
+    private static DrawingPoint? ReadPoint(JsonValue obj, string propertyName)
+    {
+        var point = GetProperty(obj, propertyName);
+        return point == null ? null : ReadPoint(point);
+    }
+
+    private static DrawingPoint? ReadPoint(JsonValue point)
+    {
+        if (point.Kind != JsonValueKind.Array || point.ArrayItems.Count != 2)
+        {
+            return null;
+        }
+
+        return new DrawingPoint(point.ArrayItems[0].NumberValue, point.ArrayItems[1].NumberValue);
+    }
+
+    private static string ReadString(JsonValue obj, string propertyName)
+    {
+        var value = GetProperty(obj, propertyName);
+        return value != null && value.Kind == JsonValueKind.String ? value.StringValue : string.Empty;
+    }
+
+    private static int ReadInt(JsonValue obj, string propertyName)
+    {
+        var value = GetProperty(obj, propertyName);
+        return value != null && value.Kind == JsonValueKind.Number ? (int)value.NumberValue : 0;
+    }
+
+    private static double ReadDouble(JsonValue obj, string propertyName)
+    {
+        var value = GetProperty(obj, propertyName);
+        return value != null && value.Kind == JsonValueKind.Number ? value.NumberValue : 0d;
+    }
+
+    private static bool ReadBoolean(JsonValue obj, string propertyName)
+    {
+        var value = GetProperty(obj, propertyName);
+        return value != null && value.Kind == JsonValueKind.Boolean && value.BooleanValue;
+    }
 
     private static void ValidateSchemaEntity(EntitySpec entity, string path, ICollection<ValidationIssue> issues)
     {

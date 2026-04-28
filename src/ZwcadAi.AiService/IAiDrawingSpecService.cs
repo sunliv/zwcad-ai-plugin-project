@@ -146,7 +146,10 @@ public static class AiIssueCodes
     public const string NeedsClarification = "needs_clarification";
     public const string ModelResponseNotJson = "model_response_not_json";
     public const string UnsafeCadCommand = "unsafe_cad_command";
+    public const string InvalidRepairAttempt = "invalid_repair_attempt";
     public const string RepairAttemptLimitExceeded = "repair_attempt_limit_exceeded";
+    public const string ModelServiceTimeout = "model_service_timeout";
+    public const string ModelServiceFailed = "model_service_failed";
 }
 
 public static class ModelPromptContract
