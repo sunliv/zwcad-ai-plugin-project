@@ -16,6 +16,15 @@
 12. 插件复核尺寸、图层、标注和实体数量。
 13. 插件显示结果报告。
 
+### Flow 1a: Clarification Follow-up Loop
+
+1. 首轮 `CreateDrawingSpec` 缺少关键工程参数时，AI 服务返回 `NeedsClarification`。
+2. 服务层保存最小澄清状态：`requestId`、原始用户问题、澄清问题、用户回答和 `promptVersion`。
+3. 澄清状态不得携带 DWG、截图、选择集、插件上下文或 API key。
+4. 用户补充回答后，服务层发起新一轮 `CreateDrawingSpec`，并把原始用户问题、澄清问题和用户回答合并为新的自然语言 `userRequest`。
+5. 澄清回答不得进入 `RepairDrawingSpec`；repair loop 仍只接收上一轮无效 DrawingSpec JSON 和稳定 issue 列表。
+6. 新一轮 create 返回有效 DrawingSpec 后，继续执行 Schema、业务规则和 renderer plan 校验。
+
 ## Flow 2: Parameterized Drawing
 
 1. 用户选择模板类型，例如“矩形板件”。

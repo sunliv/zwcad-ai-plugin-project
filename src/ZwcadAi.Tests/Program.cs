@@ -23,6 +23,7 @@ public static class Program
             ("Core uses the locked MVP domain", CoreUsesLockedMvpDomain),
             ("AI request defaults to P4 model prompt contract", AiRequestDefaultsToP4ModelPromptContract),
             ("AI repair request excludes original request payload", AiRepairRequestExcludesOriginalRequestPayload),
+            ("AI clarification state excludes drawing context", AiClarificationStateExcludesDrawingContext),
             ("Local AI adapter accepts JSON-only DrawingSpec responses", LocalAiAdapterAcceptsJsonOnlyDrawingSpecResponses),
             ("Local AI adapter rejects non-JSON model responses", LocalAiAdapterRejectsNonJsonModelResponses),
             ("Local AI adapter rejects Markdown fenced model responses", LocalAiAdapterRejectsMarkdownFencedModelResponses),
@@ -36,6 +37,7 @@ public static class Program
             ("Local AI adapter maps cancellation failures as non-repairable", LocalAiAdapterMapsCancellationFailuresAsNonRepairable),
             ("HTTP AI model client posts create requests with env API key", HttpAiModelClientPostsCreateRequestsWithEnvApiKey),
             ("HTTP AI model client posts repair requests without original context", HttpAiModelClientPostsRepairRequestsWithoutOriginalContext),
+            ("Clarification follow-up service flow uses HTTP create and valid renderer plan", ClarificationFollowUpServiceFlowUsesHttpCreateAndValidRendererPlan),
             ("HTTP AI model client timeout failures retry through adapter", HttpAiModelClientTimeoutFailuresRetryThroughAdapter),
             ("HTTP AI model client cancellation failures do not retry", HttpAiModelClientCancellationFailuresDoNotRetry),
             ("HTTP AI model client non-success failures stay redacted", HttpAiModelClientNonSuccessFailuresStayRedacted),
@@ -47,6 +49,7 @@ public static class Program
             ("Local AI adapter rejects after bounded repair failures", LocalAiAdapterRejectsAfterBoundedRepairFailures),
             ("Local AI adapter continues explicit repair within attempt limit", LocalAiAdapterContinuesExplicitRepairWithinAttemptLimit),
             ("Local AI adapter does not repair clarification responses", LocalAiAdapterDoesNotRepairClarificationResponses),
+            ("Local AI adapter starts fresh create after clarification follow-up", LocalAiAdapterStartsFreshCreateAfterClarificationFollowUp),
             ("Local AI adapter never repairs unsafe command responses", LocalAiAdapterNeverRepairsUnsafeCommandResponses),
             ("Fixed rectangular plate sample matches P1-03 geometry", FixedRectangularPlateSampleMatchesP103Geometry),
             ("DrawingSpec schema accepts valid example files", DrawingSpecSchemaAcceptsValidExampleFiles),
@@ -161,6 +164,43 @@ public static class Program
         Assert(propertyNames.Contains("RepairAttempt"), "Repair requests must carry the bounded attempt number.");
         Assert(propertyNames.Contains("MaxRepairAttempts"), "Repair requests must carry the configured attempt limit.");
         Assert(propertyNames.Contains("RepairStrategy"), "Repair requests must carry the DrawingSpec-only repair strategy.");
+    }
+
+    private static void AiClarificationStateExcludesDrawingContext()
+    {
+        var statePropertyNames = typeof(AiDrawingSpecClarificationState)
+            .GetProperties()
+            .Select(property => property.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        var followUpPropertyNames = typeof(AiClarificationFollowUpRequest)
+            .GetProperties()
+            .Select(property => property.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        AssertSequenceEqual(
+            new[]
+            {
+                "ClarificationQuestions",
+                "OriginalUserRequest",
+                "PromptVersion",
+                "RequestId",
+                "UserAnswers"
+            },
+            statePropertyNames);
+        AssertSequenceEqual(
+            new[] { "ClarificationState", "UserAnswers" },
+            followUpPropertyNames);
+        Assert(
+            statePropertyNames.All(name => name.IndexOf("dwg", StringComparison.OrdinalIgnoreCase) < 0),
+            "Clarification state must not carry DWG content.");
+        Assert(
+            statePropertyNames.All(name => name.IndexOf("screenshot", StringComparison.OrdinalIgnoreCase) < 0),
+            "Clarification state must not carry screenshots.");
+        Assert(
+            statePropertyNames.All(name => name.IndexOf("plugin", StringComparison.OrdinalIgnoreCase) < 0),
+            "Clarification state must not carry plugin context.");
     }
 
     private static void LocalAiAdapterAcceptsJsonOnlyDrawingSpecResponses()
@@ -562,6 +602,106 @@ public static class Program
         AssertEqual("missing_required", issue.GetProperty("code").GetString());
         AssertEqual("$.entities[0].layer", issue.GetProperty("path").GetString());
         AssertEqual("SchemaValidation", issue.GetProperty("source").GetString());
+    }
+
+    private static void ClarificationFollowUpServiceFlowUsesHttpCreateAndValidRendererPlan()
+    {
+        var clarificationJson = """
+            {
+              "drawingSpecVersion": "1.0",
+              "units": "mm",
+              "metadata": {
+                "title": "http clarification test",
+                "domain": "mechanical_plate",
+                "createdBy": "test",
+                "requestId": "p4-05-http"
+              },
+              "layers": [
+                { "name": "OUTLINE", "color": 7, "lineType": "Continuous", "lineWeight": 0.35 }
+              ],
+              "entities": [],
+              "dimensions": [],
+              "clarifications": [
+                "Please provide the rectangular plate width and height."
+              ]
+            }
+            """;
+        var completedSpecJson = ReadExampleJson("rectangular-plate.example.json");
+        var capturedBodies = new List<string>();
+        var handler = new CapturingHttpMessageHandler(request =>
+        {
+            var body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            capturedBodies.Add(body);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(capturedBodies.Count == 1 ? clarificationJson : completedSpecJson)
+            };
+        });
+        var adapter = new LocalAiDrawingSpecAdapter(
+            new HttpAiModelClient(new HttpClient(handler)),
+            new LocalAiServiceOptions
+            {
+                ServiceEndpoint = "https://model-gateway.example.test/drawing-spec",
+                Timeout = TimeSpan.FromSeconds(5)
+            });
+
+        var firstResponse = adapter.CreateDrawingSpec(new AiDrawingSpecRequest
+        {
+            RequestId = "p4-05-http",
+            UserRequest = "Draw a rectangular plate. Dimensions are not specified."
+        });
+
+        AssertEqual(AiDrawingSpecResponseKind.NeedsClarification, firstResponse.Kind);
+        Assert(firstResponse.ClarificationState != null, "HTTP clarification response must include follow-up state.");
+
+        var secondResponse = adapter.ContinueDrawingSpecAfterClarification(new AiClarificationFollowUpRequest
+        {
+            ClarificationState = firstResponse.ClarificationState!,
+            UserAnswers = new[] { "Use width 100 mm and height 60 mm; keep the centered diameter 12 hole." }
+        });
+
+        AssertEqual(AiDrawingSpecResponseKind.DrawingSpec, secondResponse.Kind);
+        AssertEqual(2, handler.Calls);
+        AssertEqual(2, capturedBodies.Count);
+        foreach (var body in capturedBodies)
+        {
+            using var document = JsonDocument.Parse(body);
+            AssertEqual("createDrawingSpec", document.RootElement.GetProperty("operation").GetString());
+            Assert(!body.Contains("repairDrawingSpec", StringComparison.Ordinal), "Clarification follow-up must not use the repair operation.");
+            Assert(!body.Contains("invalidDrawingSpecJson", StringComparison.Ordinal), "Clarification follow-up create must not carry repair JSON.");
+            Assert(!body.Contains("dwg", StringComparison.OrdinalIgnoreCase), "Clarification follow-up create must not carry DWG content.");
+            Assert(!body.Contains("screenshot", StringComparison.OrdinalIgnoreCase), "Clarification follow-up create must not carry screenshots.");
+            Assert(!body.Contains("pluginContext", StringComparison.Ordinal), "Clarification follow-up create must not carry plugin context.");
+        }
+
+        using (var secondBody = JsonDocument.Parse(capturedBodies[1]))
+        {
+            var root = secondBody.RootElement;
+            AssertEqual("p4-05-http", root.GetProperty("requestId").GetString());
+            AssertEqual(ModelPromptContract.PromptVersion, root.GetProperty("promptVersion").GetString());
+            var userRequest = root.GetProperty("userRequest").GetString() ?? string.Empty;
+            Assert(
+                userRequest.IndexOf("Draw a rectangular plate.", StringComparison.Ordinal) >= 0,
+                "Follow-up create must retain the original user request.");
+            Assert(
+                userRequest.IndexOf("Please provide the rectangular plate width and height.", StringComparison.Ordinal) >= 0,
+                "Follow-up create must include the clarification question.");
+            Assert(
+                userRequest.IndexOf("Use width 100 mm and height 60 mm", StringComparison.Ordinal) >= 0,
+                "Follow-up create must include the user's clarification answer.");
+            AssertEqual("mm", root.GetProperty("context").GetProperty("units").GetString());
+            AssertEqual(DrawingDomain.MechanicalPlate, root.GetProperty("context").GetProperty("domain").GetString());
+        }
+
+        Assert(secondResponse.Spec != null, "HTTP follow-up must return a parsed DrawingSpec.");
+        var businessValidation = DrawingSpecValidator.ValidateBusinessRules(secondResponse.Spec!);
+        Assert(businessValidation.IsValid, $"HTTP follow-up DrawingSpec must pass business validation: {FormatIssues(businessValidation.Issues)}");
+
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(secondResponse.Spec!);
+        Assert(plan.Validation.IsValid, $"HTTP follow-up DrawingSpec must produce a valid renderer plan: {FormatIssues(plan.Validation.Issues)}");
+        AssertEqual(3, plan.Dimensions.Count);
+        Assert(plan.Dimensions.Any(dimension => dimension.SpecDimensionId == "dim-width"), "Renderer plan must include the clarified width dimension.");
+        Assert(plan.Dimensions.Any(dimension => dimension.SpecDimensionId == "dim-height"), "Renderer plan must include the clarified height dimension.");
     }
 
     private static void HttpAiModelClientTimeoutFailuresRetryThroughAdapter()
@@ -988,6 +1128,89 @@ public static class Program
         AssertEqual(1, modelClient.DrawingSpecCalls);
         AssertEqual(0, modelClient.RepairCalls);
         AssertEqual(1, response.Clarifications.Count);
+    }
+
+    private static void LocalAiAdapterStartsFreshCreateAfterClarificationFollowUp()
+    {
+        var clarificationJson = """
+            {
+              "drawingSpecVersion": "1.0",
+              "units": "mm",
+              "metadata": {
+                "title": "clarification follow-up test",
+                "domain": "mechanical_plate",
+                "createdBy": "test",
+                "requestId": "p4-05-initial"
+              },
+              "layers": [
+                { "name": "OUTLINE", "color": 7, "lineType": "Continuous", "lineWeight": 0.35 }
+              ],
+              "entities": [],
+              "dimensions": [],
+              "clarifications": [
+                "Please provide the rectangular plate width.",
+                "Please provide the rectangular plate height."
+              ]
+            }
+            """;
+        var completedSpecJson = ReadExampleJson("rectangular-plate.example.json");
+        var modelClient = new SequenceAiModelClient(
+            new[] { clarificationJson, completedSpecJson },
+            Array.Empty<string>());
+        var adapter = new LocalAiDrawingSpecAdapter(modelClient);
+
+        var firstResponse = adapter.CreateDrawingSpec(new AiDrawingSpecRequest
+        {
+            RequestId = "p4-05-initial",
+            UserRequest = "Create a rectangular plate with one hole, dimensions not yet specified."
+        });
+
+        AssertEqual(AiDrawingSpecResponseKind.NeedsClarification, firstResponse.Kind);
+        AssertEqual(1, modelClient.DrawingSpecCalls);
+        AssertEqual(0, modelClient.RepairCalls);
+        AssertEqual(2, firstResponse.Clarifications.Count);
+        Assert(firstResponse.ClarificationState != null, "Clarification response must include follow-up state.");
+        AssertEqual("p4-05-initial", firstResponse.ClarificationState!.RequestId);
+        AssertEqual(
+            "Create a rectangular plate with one hole, dimensions not yet specified.",
+            firstResponse.ClarificationState.OriginalUserRequest);
+        AssertEqual(ModelPromptContract.PromptVersion, firstResponse.ClarificationState.PromptVersion);
+        AssertEqual(2, firstResponse.ClarificationState.ClarificationQuestions.Count);
+
+        var secondResponse = adapter.ContinueDrawingSpecAfterClarification(new AiClarificationFollowUpRequest
+        {
+            ClarificationState = firstResponse.ClarificationState,
+            UserAnswers = new[]
+            {
+                "Width 100 mm, height 60 mm, hole diameter 12 mm centered at 30,30."
+            }
+        });
+
+        AssertEqual(AiDrawingSpecResponseKind.DrawingSpec, secondResponse.Kind);
+        AssertEqual(2, modelClient.DrawingSpecCalls);
+        AssertEqual(0, modelClient.RepairCalls);
+        AssertEqual(2, modelClient.DrawingSpecRequests.Count);
+        AssertEqual("p4-05-initial", modelClient.DrawingSpecRequests[1].RequestId);
+        Assert(
+            modelClient.DrawingSpecRequests[1].UserRequest.IndexOf("Width 100 mm", StringComparison.OrdinalIgnoreCase) >= 0,
+            "Clarification answer must be sent through a fresh CreateDrawingSpec request.");
+        Assert(
+            modelClient.DrawingSpecRequests[1].UserRequest.IndexOf("Please provide the rectangular plate width.", StringComparison.Ordinal) >= 0,
+            "Fresh create request must include the original clarification question.");
+        AssertEqual(ModelPromptContract.PromptVersion, modelClient.DrawingSpecRequests[1].PromptVersion);
+        Assert(secondResponse.ClarificationState != null, "Follow-up DrawingSpec response should preserve answered clarification state.");
+        AssertEqual(1, secondResponse.ClarificationState!.UserAnswers.Count);
+        Assert(secondResponse.Spec != null, "Clarification follow-up must return a parsed DrawingSpec.");
+        Assert(secondResponse.Validation.IsValid, $"Follow-up DrawingSpec must pass adapter validation: {FormatIssues(secondResponse.Validation.Issues)}");
+
+        var businessValidation = DrawingSpecValidator.ValidateBusinessRules(secondResponse.Spec!);
+        Assert(businessValidation.IsValid, $"Follow-up DrawingSpec must pass business validation: {FormatIssues(businessValidation.Issues)}");
+
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(secondResponse.Spec!);
+        Assert(plan.Validation.IsValid, $"Follow-up DrawingSpec must produce a valid renderer plan: {FormatIssues(plan.Validation.Issues)}");
+        AssertEqual(3, plan.Dimensions.Count);
+        Assert(plan.Dimensions.Any(dimension => dimension.SpecDimensionId == "dim-width"), "Renderer plan must include the clarified plate width dimension.");
+        Assert(plan.Dimensions.Any(dimension => dimension.SpecDimensionId == "dim-height"), "Renderer plan must include the clarified plate height dimension.");
     }
 
     private static void LocalAiAdapterNeverRepairsUnsafeCommandResponses()
@@ -2609,6 +2832,7 @@ public static class Program
     {
         private readonly Queue<string> _drawingSpecResponses;
         private readonly Queue<string> _repairResponses;
+        private readonly List<AiDrawingSpecRequest> _drawingSpecRequests = new List<AiDrawingSpecRequest>();
         private readonly List<AiDrawingSpecRepairRequest> _repairRequests = new List<AiDrawingSpecRepairRequest>();
 
         public SequenceAiModelClient(IEnumerable<string> drawingSpecResponses, IEnumerable<string> repairResponses)
@@ -2621,11 +2845,14 @@ public static class Program
 
         public int RepairCalls { get; private set; }
 
+        public IReadOnlyList<AiDrawingSpecRequest> DrawingSpecRequests => _drawingSpecRequests;
+
         public IReadOnlyList<AiDrawingSpecRepairRequest> RepairRequests => _repairRequests;
 
         public string CreateDrawingSpec(AiDrawingSpecRequest request, AiModelCallOptions options)
         {
             DrawingSpecCalls++;
+            _drawingSpecRequests.Add(request);
             if (_drawingSpecResponses.Count == 0)
             {
                 throw new InvalidOperationException("No drawing spec response configured for sequence model client.");

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using ZwcadAi.Core;
 
@@ -79,19 +80,62 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
             throw new ArgumentNullException(nameof(request));
         }
 
+        return CreateDrawingSpecCore(request, clarificationState: null);
+    }
+
+    public AiDrawingSpecResponse ContinueDrawingSpecAfterClarification(AiClarificationFollowUpRequest request)
+    {
+        if (request == null)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+
+        var validationIssue = ValidateClarificationFollowUpRequest(request);
+        if (validationIssue != null)
+        {
+            return Rejected(validationIssue);
+        }
+
+        var state = request.ClarificationState;
+        var answers = NormalizeStrings(request.UserAnswers).ToArray();
+        var answeredState = new AiDrawingSpecClarificationState
+        {
+            RequestId = state.RequestId,
+            OriginalUserRequest = state.OriginalUserRequest,
+            ClarificationQuestions = NormalizeStrings(state.ClarificationQuestions).ToArray(),
+            UserAnswers = answers,
+            PromptVersion = NormalizePromptVersion(state.PromptVersion)
+        };
+        var followUpCreateRequest = new AiDrawingSpecRequest
+        {
+            RequestId = answeredState.RequestId,
+            UserRequest = BuildClarifiedUserRequest(answeredState),
+            PromptVersion = answeredState.PromptVersion
+        };
+
+        return CreateDrawingSpecCore(followUpCreateRequest, answeredState);
+    }
+
+    private AiDrawingSpecResponse CreateDrawingSpecCore(
+        AiDrawingSpecRequest request,
+        AiDrawingSpecClarificationState? clarificationState)
+    {
         var rawResponse = ExecuteModelCall(
             options => _modelClient.CreateDrawingSpec(request, options));
 
         if (!rawResponse.Success)
         {
-            return Rejected(rawResponse.Issue);
+            var rejectedResponse = Rejected(rawResponse.Issue);
+            rejectedResponse.ClarificationState = clarificationState;
+            return rejectedResponse;
         }
 
         var mappedResponse = MapRawModelOutput(rawResponse.RawText);
-        return RepairUntilResolved(
+        var resolvedResponse = RepairUntilResolved(
             mappedResponse,
             nextRepairAttempt: 1,
             maxRepairAttempts: ModelPromptContract.MaxRepairAttempts);
+        return AttachClarificationState(resolvedResponse, request, clarificationState);
     }
 
     public AiDrawingSpecResponse RepairDrawingSpec(AiDrawingSpecRepairRequest request)
@@ -361,6 +405,119 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
         return clarifications
             .Where(question => !string.IsNullOrWhiteSpace(question))
             .Take(Math.Max(0, limit))
+            .ToArray();
+    }
+
+    private static AiDrawingSpecResponse AttachClarificationState(
+        AiDrawingSpecResponse response,
+        AiDrawingSpecRequest request,
+        AiDrawingSpecClarificationState? existingState)
+    {
+        if (response.Kind != AiDrawingSpecResponseKind.NeedsClarification)
+        {
+            response.ClarificationState = existingState;
+            return response;
+        }
+
+        var stateRequestId = existingState?.RequestId;
+        var stateOriginalUserRequest = existingState?.OriginalUserRequest;
+        var statePromptVersion = existingState?.PromptVersion;
+
+        response.ClarificationState = new AiDrawingSpecClarificationState
+        {
+            RequestId = string.IsNullOrWhiteSpace(stateRequestId)
+                ? request.RequestId
+                : stateRequestId!,
+            OriginalUserRequest = string.IsNullOrWhiteSpace(stateOriginalUserRequest)
+                ? request.UserRequest
+                : stateOriginalUserRequest!,
+            ClarificationQuestions = NormalizeStrings(existingState?.ClarificationQuestions)
+                .Concat(NormalizeStrings(response.Clarifications))
+                .ToArray(),
+            UserAnswers = NormalizeStrings(existingState?.UserAnswers).ToArray(),
+            PromptVersion = NormalizePromptVersion(
+                string.IsNullOrWhiteSpace(statePromptVersion)
+                    ? request.PromptVersion
+                    : statePromptVersion)
+        };
+        return response;
+    }
+
+    private static AiModelIssue? ValidateClarificationFollowUpRequest(AiClarificationFollowUpRequest request)
+    {
+        var state = request.ClarificationState;
+        if (state == null
+            || string.IsNullOrWhiteSpace(state.RequestId)
+            || string.IsNullOrWhiteSpace(state.OriginalUserRequest)
+            || string.IsNullOrWhiteSpace(state.PromptVersion)
+            || NormalizeStrings(state.ClarificationQuestions).Count == 0)
+        {
+            return new AiModelIssue(
+                AiIssueCodes.InvalidClarificationState,
+                "$.clarificationState",
+                "Clarification follow-up requires request id, original user request, clarification questions, and prompt version.",
+                ValidationSeverity.Error,
+                AiModelIssueSource.Service,
+                repairable: false);
+        }
+
+        if (NormalizeStrings(request.UserAnswers).Count == 0)
+        {
+            return new AiModelIssue(
+                AiIssueCodes.MissingClarificationAnswer,
+                "$.userAnswers",
+                "Clarification follow-up requires at least one user answer.",
+                ValidationSeverity.Error,
+                AiModelIssueSource.UserClarification,
+                repairable: false);
+        }
+
+        return null;
+    }
+
+    private static string BuildClarifiedUserRequest(AiDrawingSpecClarificationState state)
+    {
+        var questions = NormalizeStrings(state.ClarificationQuestions);
+        var answers = NormalizeStrings(state.UserAnswers);
+        var builder = new StringBuilder();
+        builder.AppendLine(state.OriginalUserRequest.Trim());
+        builder.AppendLine();
+        builder.AppendLine("Clarification follow-up:");
+
+        var itemCount = Math.Max(questions.Count, answers.Count);
+        for (var index = 0; index < itemCount; index++)
+        {
+            if (index < questions.Count)
+            {
+                builder.Append("Question: ");
+                builder.AppendLine(questions[index]);
+            }
+
+            if (index < answers.Count)
+            {
+                builder.Append("Answer: ");
+                builder.AppendLine(answers[index]);
+            }
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static string NormalizePromptVersion(string? promptVersion)
+    {
+        if (string.IsNullOrWhiteSpace(promptVersion))
+        {
+            return ModelPromptContract.PromptVersion;
+        }
+
+        return promptVersion!;
+    }
+
+    private static IReadOnlyList<string> NormalizeStrings(IReadOnlyList<string>? values)
+    {
+        return (values ?? Array.Empty<string>())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
             .ToArray();
     }
 

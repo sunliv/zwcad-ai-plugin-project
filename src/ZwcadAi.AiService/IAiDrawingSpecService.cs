@@ -9,6 +9,8 @@ public interface IAiDrawingSpecService
 {
     AiDrawingSpecResponse CreateDrawingSpec(AiDrawingSpecRequest request);
 
+    AiDrawingSpecResponse ContinueDrawingSpecAfterClarification(AiClarificationFollowUpRequest request);
+
     AiDrawingSpecResponse RepairDrawingSpec(AiDrawingSpecRepairRequest request);
 }
 
@@ -35,6 +37,26 @@ public sealed class AiDrawingSpecRequest
     public int MaxClarificationQuestions { get; set; } = ModelPromptContract.MaxClarificationQuestions;
 }
 
+public sealed class AiClarificationFollowUpRequest
+{
+    public AiDrawingSpecClarificationState ClarificationState { get; set; } = new AiDrawingSpecClarificationState();
+
+    public IReadOnlyList<string> UserAnswers { get; set; } = Array.Empty<string>();
+}
+
+public sealed class AiDrawingSpecClarificationState
+{
+    public string RequestId { get; set; } = string.Empty;
+
+    public string OriginalUserRequest { get; set; } = string.Empty;
+
+    public IReadOnlyList<string> ClarificationQuestions { get; set; } = Array.Empty<string>();
+
+    public IReadOnlyList<string> UserAnswers { get; set; } = Array.Empty<string>();
+
+    public string PromptVersion { get; set; } = ModelPromptContract.PromptVersion;
+}
+
 public sealed class AiDrawingSpecRepairRequest
 {
     public string InvalidDrawingSpecJson { get; set; } = string.Empty;
@@ -57,6 +79,8 @@ public sealed class AiDrawingSpecResponse
     public string DrawingSpecJson { get; set; } = string.Empty;
 
     public IReadOnlyList<string> Clarifications { get; set; } = Array.Empty<string>();
+
+    public AiDrawingSpecClarificationState? ClarificationState { get; set; }
 
     public ValidationResult Validation { get; set; } = ValidationResult.Success();
 
@@ -144,6 +168,8 @@ public static class AiIssueCodes
     public const string NeedsClarification = "needs_clarification";
     public const string ModelResponseNotJson = "model_response_not_json";
     public const string UnsafeCadCommand = "unsafe_cad_command";
+    public const string InvalidClarificationState = "invalid_clarification_state";
+    public const string MissingClarificationAnswer = "missing_clarification_answer";
     public const string InvalidRepairAttempt = "invalid_repair_attempt";
     public const string RepairAttemptLimitExceeded = "repair_attempt_limit_exceeded";
     public const string ModelServiceTimeout = "model_service_timeout";

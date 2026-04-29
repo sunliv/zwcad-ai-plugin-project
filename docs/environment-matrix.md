@@ -259,6 +259,23 @@ Implemented and build/test verified against the local source baseline:
 - Automated verification: `dotnet .\src\ZwcadAi.Tests\bin\x64\Debug\net8.0\ZwcadAi.Tests.dll` passed 70 tests.
 - Build verification: `dotnet build src\ZwcadAi.Tests\ZwcadAi.Tests.csproj -p:Platform=x64` passed with 0 warnings and 0 errors.
 
+## P4-05 Clarification Follow-up Loop Evidence
+
+Date: 2026-04-28
+
+Implemented and build/test verified against the local source baseline:
+
+- Added `AiDrawingSpecClarificationState` and `AiClarificationFollowUpRequest` for the service-layer follow-up loop.
+- Clarification state is intentionally minimal: request id, original user request, clarification questions, user answers, and prompt version only.
+- `AiDrawingSpecResponse` now carries the clarification state when `NeedsClarification` is returned, so P5 UI can submit answers without reconstructing hidden context.
+- Added `ContinueDrawingSpecAfterClarification`, which validates the saved state and user answer, builds a fresh `AiDrawingSpecRequest`, and calls provider create again.
+- Clarification answers do not enter `RepairDrawingSpec`; repair remains bounded to invalid DrawingSpec JSON plus mapped issue data.
+- The HTTP provider needs no new wire contract for P4-05: the follow-up is posted as `operation=createDrawingSpec` with deterministic context and a composed `userRequest`.
+- Added an end-to-end service-flow test: missing dimensions -> `NeedsClarification` -> user supplies dimensions -> HTTP create -> valid DrawingSpec -> valid renderer plan.
+- P4-06 redacted logging remains separate: this change does not add log event models, log writers, or sensitive-content opt-in behavior.
+- Automated verification: `dotnet .\src\ZwcadAi.Tests\bin\x64\Debug\net8.0\ZwcadAi.Tests.dll` passed 73 tests.
+- Build verification: `dotnet build src\ZwcadAi.Tests\ZwcadAi.Tests.csproj -p:Platform=x64` passed with 0 warnings and 0 errors.
+
 ## Open Environment Gaps
 
 - ZWCAD 2026 and Windows 10 compatibility validation remain pending for later compatibility work.

@@ -112,6 +112,7 @@ P4-01 模型提示词合同：
 - 模型原始响应必须是 DrawingSpec v1 JSON 根对象，不额外包一层自由 envelope；服务适配层再映射为 `AiDrawingSpecResponse.Kind = DrawingSpec | NeedsClarification | Rejected`。
 - Schema 失败、业务规则失败和渲染/服务失败统一映射为稳定 issue：`code`、`path`、`message`、`severity`、`source`、`repairable`。
 - 修复循环只接收上一轮 `invalidDrawingSpecJson` 与已映射的稳定 issue 列表，最多 2 次，并且只能修复 DrawingSpec JSON；关键工程参数缺失时必须追问用户。
+- 澄清闭环使用 `NeedsClarification -> ContinueDrawingSpecAfterClarification -> CreateDrawingSpec`，服务层只保存 request id、原始用户问题、澄清问题、用户回答和 prompt version；澄清回答不得进入 `RepairDrawingSpec`。
 - `enterprise-default-v1` 在 P4-01 中仍只是 `layerStandard` / profile id；企业标准配置化作为 P4/P5 接口设计项，不在本任务改动 `CadLayerStandards`、`CadTextStyleStandards`、`CadDimensionStyleStandards` 的集中入口。
 
 插件内部接口：
