@@ -276,6 +276,22 @@ Implemented and build/test verified against the local source baseline:
 - Automated verification: `dotnet .\src\ZwcadAi.Tests\bin\x64\Debug\net8.0\ZwcadAi.Tests.dll` passed 73 tests.
 - Build verification: `dotnet build src\ZwcadAi.Tests\ZwcadAi.Tests.csproj -p:Platform=x64` passed with 0 warnings and 0 errors.
 
+## P4-06 Redacted AI Call Logging Evidence
+
+Date: 2026-04-29
+
+Implemented and build/test verified against the local source baseline:
+
+- Added an AI call log event model and a default `RedactedAiCallLogWriter` for line-delimited JSON logs.
+- Default log output is limited to `requestId`, `promptVersion`, `responseKind`, issue `code`/`path`/`source`, `elapsedMilliseconds`, `attemptCount`, and clarification question/answer counts.
+- Default logs intentionally do not include full `userRequest`, full `DrawingSpec` JSON, repair `invalidDrawingSpecJson`, DWG content, screenshots, plugin context, API key values, provider messages, or validation messages.
+- `LocalAiDrawingSpecAdapter` writes log events after create, clarification follow-up, and explicit repair calls finish service-layer mapping, preserving the existing provider request and DrawingSpec-only repair boundaries.
+- Clarification logs use `AiDrawingSpecClarificationState` only for counts by default; `OriginalUserRequest`, question text, and answer text are not emitted unless sensitive content logging is explicitly enabled.
+- `LogSensitiveDrawingContent` remains an explicit opt-in; when enabled, `RedactedAiCallLogWriter` still replaces configured API key values and `sk-...` key-shaped tokens with `[redacted-api-key]` before user request or DrawingSpec content can be written.
+- Added a P5 UI service-contract regression test for `CreateDrawingSpec -> NeedsClarification -> ContinueDrawingSpecAfterClarification -> DrawingSpec -> renderer plan -> RenderResult.Summary`.
+- Automated verification: `dotnet run --project src\ZwcadAi.Tests\ZwcadAi.Tests.csproj -p:Platform=x64` passed 78 tests.
+- Build verification: `dotnet build src\ZwcadAi.Tests\ZwcadAi.Tests.csproj -p:Platform=x64` passed with 0 warnings and 0 errors.
+
 ## Open Environment Gaps
 
 - ZWCAD 2026 and Windows 10 compatibility validation remain pending for later compatibility work.

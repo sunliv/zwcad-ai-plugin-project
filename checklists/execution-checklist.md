@@ -45,7 +45,7 @@
 - [x] 实现结构化输出（P4-02 本地 deterministic adapter 已将原始输出映射为 `DrawingSpec` / `NeedsClarification` / `Rejected`）。
 - [ ] 实现缺参追问（P4-02 已映射 clarification 响应；UI 追问流程仍未实现）。
 - [x] 实现校验失败修复循环（P4-03 已覆盖 schema/business validation 失败后的 bounded DrawingSpec-only repair；clarification/unsafe command 不进入 repair）。
-- [ ] 实现调用日志和脱敏（P4-02 已保留默认不记录敏感全文的配置位；完整日志管线仍未实现）。
+- [x] 实现调用日志和脱敏（P4-06 已完成结构化日志事件、默认脱敏 writer、敏感内容 opt-in 和 API key 禁止记录测试）。
 
 ## P5 Plugin UI
 

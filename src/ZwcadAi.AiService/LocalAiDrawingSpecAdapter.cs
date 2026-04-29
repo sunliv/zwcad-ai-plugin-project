@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -40,6 +41,8 @@ public sealed class LocalAiServiceOptions
     public string ApiKeyEnvironmentVariable { get; set; } = string.Empty;
 
     public bool LogSensitiveDrawingContent { get; set; }
+
+    public IAiCallLogWriter LogWriter { get; set; } = NullAiCallLogWriter.Instance;
 
     public CancellationToken CancellationToken { get; set; } = CancellationToken.None;
 
@@ -120,22 +123,39 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
         AiDrawingSpecRequest request,
         AiDrawingSpecClarificationState? clarificationState)
     {
+        var stopwatch = Stopwatch.StartNew();
+        var attemptCount = 0;
         var rawResponse = ExecuteModelCall(
             options => _modelClient.CreateDrawingSpec(request, options));
+        attemptCount += rawResponse.AttemptCount;
 
+        AiDrawingSpecResponse response;
         if (!rawResponse.Success)
         {
             var rejectedResponse = Rejected(rawResponse.Issue);
             rejectedResponse.ClarificationState = clarificationState;
-            return rejectedResponse;
+            response = rejectedResponse;
+        }
+        else
+        {
+            var mappedResponse = MapRawModelOutput(rawResponse.RawText);
+            var resolvedResponse = RepairUntilResolved(
+                mappedResponse,
+                nextRepairAttempt: 1,
+                maxRepairAttempts: ModelPromptContract.MaxRepairAttempts);
+            attemptCount += resolvedResponse.AttemptCount;
+            response = AttachClarificationState(resolvedResponse.Response, request, clarificationState);
         }
 
-        var mappedResponse = MapRawModelOutput(rawResponse.RawText);
-        var resolvedResponse = RepairUntilResolved(
-            mappedResponse,
-            nextRepairAttempt: 1,
-            maxRepairAttempts: ModelPromptContract.MaxRepairAttempts);
-        return AttachClarificationState(resolvedResponse, request, clarificationState);
+        stopwatch.Stop();
+        WriteAiCallLog(CreateLogEvent(
+            request.RequestId,
+            request.PromptVersion,
+            response,
+            attemptCount,
+            stopwatch.Elapsed,
+            CreateSensitiveContent(request.UserRequest, response.DrawingSpecJson, invalidDrawingSpecJson: string.Empty)));
+        return response;
     }
 
     public AiDrawingSpecResponse RepairDrawingSpec(AiDrawingSpecRepairRequest request)
@@ -147,57 +167,94 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
 
         if (request.RepairAttempt < 1)
         {
-            return Rejected(new AiModelIssue(
+            var response = Rejected(new AiModelIssue(
                 AiIssueCodes.InvalidRepairAttempt,
                 "$.repairAttempt",
                 "Repair attempt must be greater than or equal to 1.",
                 ValidationSeverity.Error,
                 AiModelIssueSource.Service,
                 repairable: false));
+            WriteAiCallLog(CreateLogEvent(
+                requestId: string.Empty,
+                promptVersion: ModelPromptContract.PromptVersion,
+                response: response,
+                attemptCount: 0,
+                elapsed: TimeSpan.Zero,
+                sensitiveContent: CreateSensitiveContent(userRequest: string.Empty, response.DrawingSpecJson, request.InvalidDrawingSpecJson)));
+            return response;
         }
 
         if (request.RepairAttempt > request.MaxRepairAttempts)
         {
-            return Rejected(new AiModelIssue(
+            var response = Rejected(new AiModelIssue(
                 AiIssueCodes.RepairAttemptLimitExceeded,
                 "$.repairAttempt",
                 $"Repair attempt {request.RepairAttempt} exceeds the configured limit of {request.MaxRepairAttempts}.",
                 ValidationSeverity.Error,
                 AiModelIssueSource.Service,
                 repairable: false));
+            WriteAiCallLog(CreateLogEvent(
+                requestId: string.Empty,
+                promptVersion: ModelPromptContract.PromptVersion,
+                response: response,
+                attemptCount: 0,
+                elapsed: TimeSpan.Zero,
+                sensitiveContent: CreateSensitiveContent(userRequest: string.Empty, response.DrawingSpecJson, request.InvalidDrawingSpecJson)));
+            return response;
         }
 
+        var stopwatch = Stopwatch.StartNew();
+        var attemptCount = 0;
         var rawResponse = ExecuteModelCall(
             options => _modelClient.RepairDrawingSpec(request, options));
+        attemptCount += rawResponse.AttemptCount;
 
+        AiDrawingSpecResponse finalResponse;
         if (!rawResponse.Success)
         {
-            return Rejected(rawResponse.Issue);
+            finalResponse = Rejected(rawResponse.Issue);
+        }
+        else
+        {
+            var mappedResponse = MapRawModelOutput(rawResponse.RawText);
+            var resolvedResponse = RepairUntilResolved(
+                mappedResponse,
+                nextRepairAttempt: request.RepairAttempt + 1,
+                maxRepairAttempts: request.MaxRepairAttempts);
+            attemptCount += resolvedResponse.AttemptCount;
+            finalResponse = resolvedResponse.Response;
         }
 
-        var mappedResponse = MapRawModelOutput(rawResponse.RawText);
-        return RepairUntilResolved(
-            mappedResponse,
-            nextRepairAttempt: request.RepairAttempt + 1,
-            maxRepairAttempts: request.MaxRepairAttempts);
+        stopwatch.Stop();
+        WriteAiCallLog(CreateLogEvent(
+            requestId: string.Empty,
+            promptVersion: ModelPromptContract.PromptVersion,
+            response: finalResponse,
+            attemptCount: attemptCount,
+            elapsed: stopwatch.Elapsed,
+            sensitiveContent: CreateSensitiveContent(userRequest: string.Empty, finalResponse.DrawingSpecJson, request.InvalidDrawingSpecJson)));
+        return finalResponse;
     }
 
-    private AiDrawingSpecResponse RepairUntilResolved(
+    private RepairResolutionResult RepairUntilResolved(
         AiDrawingSpecResponse mappedResponse,
         int nextRepairAttempt,
         int maxRepairAttempts)
     {
         var currentResponse = mappedResponse;
         var repairAttempt = nextRepairAttempt;
+        var attemptCount = 0;
 
         while (CanRepair(currentResponse))
         {
             if (repairAttempt > maxRepairAttempts)
             {
-                return RejectedRepairAttemptLimitExceeded(
-                    currentResponse,
-                    repairAttempt,
-                    maxRepairAttempts);
+                return new RepairResolutionResult(
+                    RejectedRepairAttemptLimitExceeded(
+                        currentResponse,
+                        repairAttempt,
+                        maxRepairAttempts),
+                    attemptCount);
             }
 
             var repairRequest = new AiDrawingSpecRepairRequest
@@ -211,17 +268,18 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
 
             var rawRepairResponse = ExecuteModelCall(
                 options => _modelClient.RepairDrawingSpec(repairRequest, options));
+            attemptCount += rawRepairResponse.AttemptCount;
 
             if (!rawRepairResponse.Success)
             {
-                return Rejected(rawRepairResponse.Issue);
+                return new RepairResolutionResult(Rejected(rawRepairResponse.Issue), attemptCount);
             }
 
             currentResponse = MapRawModelOutput(rawRepairResponse.RawText);
             repairAttempt++;
         }
 
-        return currentResponse;
+        return new RepairResolutionResult(currentResponse, attemptCount);
     }
 
     private ModelCallResult ExecuteModelCall(Func<AiModelCallOptions, string> call)
@@ -229,12 +287,17 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
         var callOptions = _options.ToCallOptions();
         var attempts = Math.Max(1, callOptions.MaxRetries + 1);
         Exception? lastFailure = null;
+        var stopwatch = Stopwatch.StartNew();
+        var attemptsMade = 0;
 
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
+            attemptsMade = attempt;
             try
             {
-                return ModelCallResult.FromRawText(call(callOptions));
+                var rawText = call(callOptions);
+                stopwatch.Stop();
+                return ModelCallResult.FromRawText(rawText, attemptsMade, stopwatch.Elapsed);
             }
             catch (TimeoutException exception)
             {
@@ -254,33 +317,110 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
 
         if (lastFailure is TimeoutException)
         {
+            stopwatch.Stop();
             return ModelCallResult.FromIssue(new AiModelIssue(
                 AiIssueCodes.ModelServiceTimeout,
                 "$.service",
                 "Model service timed out before returning DrawingSpec JSON.",
                 ValidationSeverity.Error,
                 AiModelIssueSource.Service,
-                repairable: false));
+                repairable: false),
+                attemptsMade,
+                stopwatch.Elapsed);
         }
 
         if (lastFailure is OperationCanceledException)
         {
+            stopwatch.Stop();
             return ModelCallResult.FromIssue(new AiModelIssue(
                 AiIssueCodes.ModelServiceCanceled,
                 "$.service",
                 "Model service call was canceled before returning DrawingSpec JSON.",
                 ValidationSeverity.Error,
                 AiModelIssueSource.Service,
-                repairable: false));
+                repairable: false),
+                attemptsMade,
+                stopwatch.Elapsed);
         }
 
+        stopwatch.Stop();
         return ModelCallResult.FromIssue(new AiModelIssue(
             AiIssueCodes.ModelServiceFailed,
             "$.service",
             "Model service failed before returning DrawingSpec JSON.",
             ValidationSeverity.Error,
             AiModelIssueSource.Service,
-            repairable: false));
+            repairable: false),
+            attemptsMade,
+            stopwatch.Elapsed);
+    }
+
+    private AiCallLogEvent CreateLogEvent(
+        string requestId,
+        string promptVersion,
+        AiDrawingSpecResponse response,
+        int attemptCount,
+        TimeSpan elapsed,
+        AiCallSensitiveContent? sensitiveContent)
+    {
+        var clarificationState = response.ClarificationState;
+
+        return new AiCallLogEvent
+        {
+            RequestId = requestId ?? string.Empty,
+            PromptVersion = NormalizePromptVersion(promptVersion),
+            ResponseKind = response.Kind,
+            Issues = response.Issues.Select(AiCallLogIssue.FromModelIssue).ToArray(),
+            Elapsed = elapsed,
+            AttemptCount = attemptCount,
+            ClarificationQuestionCount = NormalizeStrings(clarificationState?.ClarificationQuestions).Count,
+            ClarificationAnswerCount = NormalizeStrings(clarificationState?.UserAnswers).Count,
+            SensitiveContent = sensitiveContent,
+            ApiKeyRedactionValues = GetApiKeyRedactionValues()
+        };
+    }
+
+    private AiCallSensitiveContent? CreateSensitiveContent(
+        string userRequest,
+        string drawingSpecJson,
+        string invalidDrawingSpecJson)
+    {
+        if (!_options.LogSensitiveDrawingContent)
+        {
+            return null;
+        }
+
+        return new AiCallSensitiveContent
+        {
+            UserRequest = userRequest ?? string.Empty,
+            DrawingSpecJson = drawingSpecJson ?? string.Empty,
+            InvalidDrawingSpecJson = invalidDrawingSpecJson ?? string.Empty
+        };
+    }
+
+    private IReadOnlyList<string> GetApiKeyRedactionValues()
+    {
+        var apiKey = ReadConfiguredApiKeyForRedaction();
+        return string.IsNullOrEmpty(apiKey)
+            ? Array.Empty<string>()
+            : new[] { apiKey };
+    }
+
+    private string ReadConfiguredApiKeyForRedaction()
+    {
+        var environmentVariable = _options.ApiKeyEnvironmentVariable;
+        if (string.IsNullOrWhiteSpace(environmentVariable))
+        {
+            return string.Empty;
+        }
+
+        return Environment.GetEnvironmentVariable(environmentVariable) ?? string.Empty;
+    }
+
+    private void WriteAiCallLog(AiCallLogEvent logEvent)
+    {
+        var logWriter = _options.LogWriter ?? NullAiCallLogWriter.Instance;
+        logWriter.Write(logEvent);
     }
 
     private static AiDrawingSpecResponse MapRawModelOutput(string rawOutput)
@@ -588,11 +728,13 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
 
     private sealed class ModelCallResult
     {
-        private ModelCallResult(bool success, string rawText, AiModelIssue issue)
+        private ModelCallResult(bool success, string rawText, AiModelIssue issue, int attemptCount, TimeSpan elapsed)
         {
             Success = success;
             RawText = rawText;
             Issue = issue;
+            AttemptCount = attemptCount;
+            Elapsed = elapsed;
         }
 
         public bool Success { get; }
@@ -601,14 +743,18 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
 
         public AiModelIssue Issue { get; }
 
-        public static ModelCallResult FromRawText(string rawText)
+        public int AttemptCount { get; }
+
+        public TimeSpan Elapsed { get; }
+
+        public static ModelCallResult FromRawText(string rawText, int attemptCount, TimeSpan elapsed)
         {
-            return new ModelCallResult(true, rawText ?? string.Empty, EmptyIssue());
+            return new ModelCallResult(true, rawText ?? string.Empty, EmptyIssue(), attemptCount, elapsed);
         }
 
-        public static ModelCallResult FromIssue(AiModelIssue issue)
+        public static ModelCallResult FromIssue(AiModelIssue issue, int attemptCount, TimeSpan elapsed)
         {
-            return new ModelCallResult(false, string.Empty, issue);
+            return new ModelCallResult(false, string.Empty, issue, attemptCount, elapsed);
         }
 
         private static AiModelIssue EmptyIssue()
@@ -621,5 +767,18 @@ public sealed class LocalAiDrawingSpecAdapter : IAiDrawingSpecService
                 AiModelIssueSource.Service,
                 repairable: false);
         }
+    }
+
+    private sealed class RepairResolutionResult
+    {
+        public RepairResolutionResult(AiDrawingSpecResponse response, int attemptCount)
+        {
+            Response = response;
+            AttemptCount = attemptCount;
+        }
+
+        public AiDrawingSpecResponse Response { get; }
+
+        public int AttemptCount { get; }
     }
 }

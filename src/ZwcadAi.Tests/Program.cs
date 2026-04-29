@@ -24,6 +24,10 @@ public static class Program
             ("AI request defaults to P4 model prompt contract", AiRequestDefaultsToP4ModelPromptContract),
             ("AI repair request excludes original request payload", AiRepairRequestExcludesOriginalRequestPayload),
             ("AI clarification state excludes drawing context", AiClarificationStateExcludesDrawingContext),
+            ("Redacted AI call log writer records safe fields only by default", RedactedAiCallLogWriterRecordsSafeFieldsOnlyByDefault),
+            ("Redacted AI call log writer always redacts API keys from sensitive content", RedactedAiCallLogWriterAlwaysRedactsApiKeysFromSensitiveContent),
+            ("Local AI adapter writes redacted create and clarification logs", LocalAiAdapterWritesRedactedCreateAndClarificationLogs),
+            ("Sensitive AI call logging opt-in never records API key", SensitiveAiCallLoggingOptInNeverRecordsApiKey),
             ("Local AI adapter accepts JSON-only DrawingSpec responses", LocalAiAdapterAcceptsJsonOnlyDrawingSpecResponses),
             ("Local AI adapter rejects non-JSON model responses", LocalAiAdapterRejectsNonJsonModelResponses),
             ("Local AI adapter rejects Markdown fenced model responses", LocalAiAdapterRejectsMarkdownFencedModelResponses),
@@ -50,6 +54,7 @@ public static class Program
             ("Local AI adapter continues explicit repair within attempt limit", LocalAiAdapterContinuesExplicitRepairWithinAttemptLimit),
             ("Local AI adapter does not repair clarification responses", LocalAiAdapterDoesNotRepairClarificationResponses),
             ("Local AI adapter starts fresh create after clarification follow-up", LocalAiAdapterStartsFreshCreateAfterClarificationFollowUp),
+            ("Service flow returns render result summary after clarification", ServiceFlowReturnsRenderResultSummaryAfterClarification),
             ("Local AI adapter never repairs unsafe command responses", LocalAiAdapterNeverRepairsUnsafeCommandResponses),
             ("Fixed rectangular plate sample matches P1-03 geometry", FixedRectangularPlateSampleMatchesP103Geometry),
             ("DrawingSpec schema accepts valid example files", DrawingSpecSchemaAcceptsValidExampleFiles),
@@ -201,6 +206,242 @@ public static class Program
         Assert(
             statePropertyNames.All(name => name.IndexOf("plugin", StringComparison.OrdinalIgnoreCase) < 0),
             "Clarification state must not carry plugin context.");
+    }
+
+    private static void RedactedAiCallLogWriterRecordsSafeFieldsOnlyByDefault()
+    {
+        var output = new StringWriter();
+        var logWriter = new RedactedAiCallLogWriter(output);
+
+        logWriter.Write(new AiCallLogEvent
+        {
+            RequestId = "p4-06-safe",
+            PromptVersion = ModelPromptContract.PromptVersion,
+            ResponseKind = AiDrawingSpecResponseKind.Rejected,
+            Issues = new[]
+            {
+                new AiCallLogIssue
+                {
+                    Code = "missing_required",
+                    Path = "$.entities[0].layer",
+                    Source = AiModelIssueSource.SchemaValidation
+                }
+            },
+            Elapsed = TimeSpan.FromMilliseconds(12),
+            AttemptCount = 2,
+            ClarificationQuestionCount = 3,
+            ClarificationAnswerCount = 1
+        });
+
+        var logLine = output.ToString();
+        Assert(!logLine.Contains("userRequest", StringComparison.OrdinalIgnoreCase), "Default AI logs must not include a userRequest field.");
+        Assert(!logLine.Contains("drawingSpecJson", StringComparison.OrdinalIgnoreCase), "Default AI logs must not include full DrawingSpec JSON.");
+        Assert(!logLine.Contains("invalidDrawingSpecJson", StringComparison.OrdinalIgnoreCase), "Default AI logs must not include repair DrawingSpec JSON.");
+        Assert(!logLine.Contains("message", StringComparison.OrdinalIgnoreCase), "Default AI logs must not include provider or validation detail messages.");
+        Assert(!logLine.Contains("dwg", StringComparison.OrdinalIgnoreCase), "Default AI logs must not include DWG content.");
+        Assert(!logLine.Contains("screenshot", StringComparison.OrdinalIgnoreCase), "Default AI logs must not include screenshots.");
+        Assert(!logLine.Contains("plugin", StringComparison.OrdinalIgnoreCase), "Default AI logs must not include plugin context.");
+        Assert(!logLine.Contains("api", StringComparison.OrdinalIgnoreCase), "Default AI logs must not include API key fields.");
+
+        using var document = JsonDocument.Parse(logLine);
+        var root = document.RootElement;
+        AssertSequenceEqual(
+            new[]
+            {
+                "attemptCount",
+                "clarificationAnswerCount",
+                "clarificationQuestionCount",
+                "elapsedMilliseconds",
+                "issues",
+                "promptVersion",
+                "requestId",
+                "responseKind"
+            },
+            root.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        AssertEqual("p4-06-safe", root.GetProperty("requestId").GetString());
+        AssertEqual(ModelPromptContract.PromptVersion, root.GetProperty("promptVersion").GetString());
+        AssertEqual("Rejected", root.GetProperty("responseKind").GetString());
+        AssertEqual(2, root.GetProperty("attemptCount").GetInt32());
+        Assert(root.GetProperty("elapsedMilliseconds").GetDouble() >= 0, "Elapsed time must be logged as a non-negative duration.");
+        AssertEqual(3, root.GetProperty("clarificationQuestionCount").GetInt32());
+        AssertEqual(1, root.GetProperty("clarificationAnswerCount").GetInt32());
+
+        var issue = root.GetProperty("issues")[0];
+        AssertSequenceEqual(
+            new[] { "code", "path", "source" },
+            issue.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        AssertEqual("missing_required", issue.GetProperty("code").GetString());
+        AssertEqual("$.entities[0].layer", issue.GetProperty("path").GetString());
+        AssertEqual("SchemaValidation", issue.GetProperty("source").GetString());
+    }
+
+    private static void RedactedAiCallLogWriterAlwaysRedactsApiKeysFromSensitiveContent()
+    {
+        const string configuredApiKey = "test-secret-token";
+        const string openAiStyleApiKey = "sk-proj-direct-writer-key-1234567890abcdef";
+        var output = new StringWriter();
+        var logWriter = new RedactedAiCallLogWriter(output);
+
+        logWriter.Write(new AiCallLogEvent
+        {
+            RequestId = "p4-06-writer-redaction",
+            PromptVersion = ModelPromptContract.PromptVersion,
+            ResponseKind = AiDrawingSpecResponseKind.DrawingSpec,
+            AttemptCount = 1,
+            ApiKeyRedactionValues = new[] { configuredApiKey },
+            SensitiveContent = new AiCallSensitiveContent
+            {
+                UserRequest = $"Use configured key {configuredApiKey} and generated key {openAiStyleApiKey}.",
+                DrawingSpecJson = $"{{\"metadata\":{{\"title\":\"{configuredApiKey}\"}}}}",
+                InvalidDrawingSpecJson = $"{{\"debug\":\"{openAiStyleApiKey}\"}}"
+            }
+        });
+
+        var logLine = output.ToString();
+        Assert(!logLine.Contains(configuredApiKey, StringComparison.Ordinal), "Writer-level redaction must remove configured API key values from sensitive content.");
+        Assert(!logLine.Contains(openAiStyleApiKey, StringComparison.Ordinal), "Writer-level redaction must remove OpenAI-style API key values from sensitive content.");
+        Assert(logLine.Contains("[redacted-api-key]", StringComparison.Ordinal), "Writer-level redaction must use a stable API key redaction marker.");
+
+        using var document = JsonDocument.Parse(logLine);
+        var properties = document.RootElement.EnumerateObject().Select(property => property.Name).ToArray();
+        Assert(!properties.Contains("apiKeyRedactionValues", StringComparer.Ordinal), "API key redaction values must never be serialized.");
+    }
+
+    private static void LocalAiAdapterWritesRedactedCreateAndClarificationLogs()
+    {
+        var clarificationQuestion = "Please provide the confidential plate width.";
+        var clarificationJson = $$"""
+            {
+              "drawingSpecVersion": "1.0",
+              "units": "mm",
+              "metadata": {
+                "title": "clarification log test",
+                "domain": "mechanical_plate",
+                "createdBy": "test",
+                "requestId": "p4-06-clarification"
+              },
+              "layers": [
+                { "name": "OUTLINE", "color": 7, "lineType": "Continuous", "lineWeight": 0.35 }
+              ],
+              "entities": [],
+              "dimensions": [],
+              "clarifications": [
+                "{{clarificationQuestion}}"
+              ]
+            }
+            """;
+        var completedSpecJson = ReadExampleJson("rectangular-plate.example.json");
+        var modelClient = new SequenceAiModelClient(
+            new[] { clarificationJson, completedSpecJson },
+            Array.Empty<string>());
+        var output = new StringWriter();
+        var adapter = new LocalAiDrawingSpecAdapter(
+            modelClient,
+            new LocalAiServiceOptions
+            {
+                LogWriter = new RedactedAiCallLogWriter(output)
+            });
+
+        var firstResponse = adapter.CreateDrawingSpec(new AiDrawingSpecRequest
+        {
+            RequestId = "p4-06-clarification",
+            UserRequest = "SECRET-USER-REQUEST: draw a private part."
+        });
+        var secondResponse = adapter.ContinueDrawingSpecAfterClarification(new AiClarificationFollowUpRequest
+        {
+            ClarificationState = firstResponse.ClarificationState!,
+            UserAnswers = new[] { "SECRET-ANSWER: width 100 mm and height 60 mm." }
+        });
+
+        AssertEqual(AiDrawingSpecResponseKind.NeedsClarification, firstResponse.Kind);
+        AssertEqual(AiDrawingSpecResponseKind.DrawingSpec, secondResponse.Kind);
+        var logText = output.ToString();
+        Assert(!logText.Contains("SECRET-USER-REQUEST", StringComparison.Ordinal), "Default logs must redact the original user request.");
+        Assert(!logText.Contains("SECRET-ANSWER", StringComparison.Ordinal), "Default logs must redact clarification answers.");
+        Assert(!logText.Contains(clarificationQuestion, StringComparison.Ordinal), "Default logs must record clarification counts, not question text.");
+        Assert(!logText.Contains("outer-profile", StringComparison.Ordinal), "Default logs must not include full DrawingSpec entity ids.");
+        Assert(!logText.Contains(completedSpecJson.Trim(), StringComparison.Ordinal), "Default logs must not include full DrawingSpec JSON.");
+
+        var logLines = logText.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+        AssertEqual(2, logLines.Length);
+
+        using (var firstLog = JsonDocument.Parse(logLines[0]))
+        {
+            var root = firstLog.RootElement;
+            AssertEqual("p4-06-clarification", root.GetProperty("requestId").GetString());
+            AssertEqual("NeedsClarification", root.GetProperty("responseKind").GetString());
+            AssertEqual(1, root.GetProperty("attemptCount").GetInt32());
+            AssertEqual(1, root.GetProperty("clarificationQuestionCount").GetInt32());
+            AssertEqual(0, root.GetProperty("clarificationAnswerCount").GetInt32());
+            AssertEqual(AiIssueCodes.NeedsClarification, root.GetProperty("issues")[0].GetProperty("code").GetString());
+            AssertEqual("$.clarifications", root.GetProperty("issues")[0].GetProperty("path").GetString());
+            AssertEqual("UserClarification", root.GetProperty("issues")[0].GetProperty("source").GetString());
+        }
+
+        using (var secondLog = JsonDocument.Parse(logLines[1]))
+        {
+            var root = secondLog.RootElement;
+            AssertEqual("p4-06-clarification", root.GetProperty("requestId").GetString());
+            AssertEqual("DrawingSpec", root.GetProperty("responseKind").GetString());
+            AssertEqual(1, root.GetProperty("attemptCount").GetInt32());
+            AssertEqual(1, root.GetProperty("clarificationQuestionCount").GetInt32());
+            AssertEqual(1, root.GetProperty("clarificationAnswerCount").GetInt32());
+            AssertEqual(0, root.GetProperty("issues").GetArrayLength());
+        }
+    }
+
+    private static void SensitiveAiCallLoggingOptInNeverRecordsApiKey()
+    {
+        const string apiKeyEnv = "ZWCAD_AI_LOGGING_TEST_API_KEY";
+        const string apiKey = "test-secret-token";
+        var previousApiKey = Environment.GetEnvironmentVariable(apiKeyEnv);
+        var responseJson = MinimalSpecJson("""
+            {
+              "id": "sensitive-log-line",
+              "type": "line",
+              "layer": "OUTLINE",
+              "start": [0, 0],
+              "end": [100, 0]
+            }
+            """).Replace("schema validation test", apiKey);
+        var output = new StringWriter();
+
+        try
+        {
+            Environment.SetEnvironmentVariable(apiKeyEnv, apiKey);
+            var adapter = new LocalAiDrawingSpecAdapter(
+                new StaticAiModelClient(responseJson),
+                new LocalAiServiceOptions
+                {
+                    ApiKeyEnvironmentVariable = apiKeyEnv,
+                    LogSensitiveDrawingContent = true,
+                    LogWriter = new RedactedAiCallLogWriter(output)
+                });
+
+            var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest
+            {
+                RequestId = "p4-06-sensitive",
+                UserRequest = $"Draw a plate. The API key is {apiKey}."
+            });
+
+            AssertEqual(AiDrawingSpecResponseKind.DrawingSpec, response.Kind);
+            var logLine = output.ToString();
+            Assert(!logLine.Contains(apiKey, StringComparison.Ordinal), "Sensitive logging opt-in must still redact the configured API key value.");
+            Assert(logLine.Contains("[redacted-api-key]", StringComparison.Ordinal), "Sensitive logging must replace API key values with a stable redaction marker.");
+
+            using var document = JsonDocument.Parse(logLine);
+            var sensitiveContent = document.RootElement.GetProperty("sensitiveContent");
+            Assert(
+                sensitiveContent.GetProperty("userRequest").GetString()!.Contains("[redacted-api-key]", StringComparison.Ordinal),
+                "Opt-in sensitive logging may include the user request only after API key redaction.");
+            Assert(
+                !sensitiveContent.GetProperty("drawingSpecJson").GetString()!.Contains(apiKey, StringComparison.Ordinal),
+                "Opt-in sensitive logging must redact API key values from DrawingSpec JSON.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(apiKeyEnv, previousApiKey);
+        }
     }
 
     private static void LocalAiAdapterAcceptsJsonOnlyDrawingSpecResponses()
@@ -1211,6 +1452,75 @@ public static class Program
         AssertEqual(3, plan.Dimensions.Count);
         Assert(plan.Dimensions.Any(dimension => dimension.SpecDimensionId == "dim-width"), "Renderer plan must include the clarified plate width dimension.");
         Assert(plan.Dimensions.Any(dimension => dimension.SpecDimensionId == "dim-height"), "Renderer plan must include the clarified plate height dimension.");
+    }
+
+    private static void ServiceFlowReturnsRenderResultSummaryAfterClarification()
+    {
+        var clarificationJson = """
+            {
+              "drawingSpecVersion": "1.0",
+              "units": "mm",
+              "metadata": {
+                "title": "P5 UI service contract clarification test",
+                "domain": "mechanical_plate",
+                "createdBy": "test",
+                "requestId": "p5-ui-contract"
+              },
+              "layers": [
+                { "name": "OUTLINE", "color": 7, "lineType": "Continuous", "lineWeight": 0.35 }
+              ],
+              "entities": [],
+              "dimensions": [],
+              "clarifications": [
+                "Please provide the rectangular plate width and height."
+              ]
+            }
+            """;
+        var completedSpecJson = ReadExampleJson("rectangular-plate.example.json");
+        var modelClient = new SequenceAiModelClient(
+            new[] { clarificationJson, completedSpecJson },
+            Array.Empty<string>());
+        var adapter = new LocalAiDrawingSpecAdapter(modelClient);
+        var renderer = new DrawingSpecPlanRenderer();
+
+        var firstResponse = adapter.CreateDrawingSpec(new AiDrawingSpecRequest
+        {
+            RequestId = "p5-ui-contract",
+            UserRequest = "Create a rectangular plate with one centered hole."
+        });
+
+        AssertEqual(AiDrawingSpecResponseKind.NeedsClarification, firstResponse.Kind);
+        AssertEqual(1, firstResponse.Clarifications.Count);
+        Assert(firstResponse.ClarificationState != null, "P5 UI contract requires a clarification state to continue the service flow.");
+
+        var secondResponse = adapter.ContinueDrawingSpecAfterClarification(new AiClarificationFollowUpRequest
+        {
+            ClarificationState = firstResponse.ClarificationState!,
+            UserAnswers = new[] { "Use width 100 mm, height 60 mm, and a 12 mm centered hole." }
+        });
+
+        AssertEqual(AiDrawingSpecResponseKind.DrawingSpec, secondResponse.Kind);
+        Assert(secondResponse.Spec != null, "P5 UI contract requires a parsed DrawingSpec after clarification.");
+
+        var plan = renderer.CreatePlan(secondResponse.Spec!);
+        Assert(plan.Validation.IsValid, $"P5 UI contract requires a valid renderer plan: {FormatIssues(plan.Validation.Issues)}");
+        AssertEqual(3, plan.Dimensions.Count);
+
+        var renderResult = renderer.Render(
+            secondResponse.Spec!,
+            new RenderContext("p5-ui-contract", ModelPromptContract.LayerStandard));
+        var summary = renderResult.Summary;
+
+        Assert(renderResult.Success, $"P5 UI contract requires successful render result: {FormatIssues(renderResult.Validation.Issues)}");
+        Assert(summary.Success, "P5 UI contract requires RenderResult.Summary to report success.");
+        AssertEqual(RenderStatus.Success, summary.Status);
+        AssertEqual(plan.Entities.Count, summary.EntityCount);
+        AssertEqual(plan.Dimensions.Count, summary.DimensionCount);
+        AssertEqual(renderResult.Entities.Count, summary.CadObjectCount);
+        Assert(summary.Bounds != null, "P5 UI contract requires non-empty geometry bounds for preview summary.");
+        Assert(summary.ObjectIdBySpecId.ContainsKey("outer-profile"), "P5 UI contract requires spec id to rendered object id mapping.");
+        Assert(summary.LayerCounts.ContainsKey(CadLayerNames.Outline), "P5 UI contract requires layer counts for UI summary.");
+        AssertEqual("not_requested", summary.ExportStatus);
     }
 
     private static void LocalAiAdapterNeverRepairsUnsafeCommandResponses()
