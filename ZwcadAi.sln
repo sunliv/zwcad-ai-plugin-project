@@ -8,6 +8,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZwcadAi.Renderer", "src\Zwc
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZwcadAi.AiService", "src\ZwcadAi.AiService\ZwcadAi.AiService.csproj", "{4BDA9EAF-59C4-4D2E-94D0-91E266D79D03}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZwcadAi.Ui", "src\ZwcadAi.Ui\ZwcadAi.Ui.csproj", "{C85C4018-A817-4952-A84B-3EC66A135E64}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZwcadAiPlugin", "src\ZwcadAiPlugin\ZwcadAiPlugin.csproj", "{0D613F38-E287-4DEB-A4D7-F9FCFAE05A6B}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZwcadAi.Tests", "src\ZwcadAi.Tests\ZwcadAi.Tests.csproj", "{6617F64D-B8BE-4359-ACD9-B5F48934C82D}"
@@ -30,14 +32,18 @@ Global
 		{4BDA9EAF-59C4-4D2E-94D0-91E266D79D03}.Debug|x64.Build.0 = Debug|Any CPU
 		{4BDA9EAF-59C4-4D2E-94D0-91E266D79D03}.Release|x64.ActiveCfg = Release|Any CPU
 		{4BDA9EAF-59C4-4D2E-94D0-91E266D79D03}.Release|x64.Build.0 = Release|Any CPU
+		{C85C4018-A817-4952-A84B-3EC66A135E64}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{C85C4018-A817-4952-A84B-3EC66A135E64}.Debug|x64.Build.0 = Debug|Any CPU
+		{C85C4018-A817-4952-A84B-3EC66A135E64}.Release|x64.ActiveCfg = Release|Any CPU
+		{C85C4018-A817-4952-A84B-3EC66A135E64}.Release|x64.Build.0 = Release|Any CPU
 		{0D613F38-E287-4DEB-A4D7-F9FCFAE05A6B}.Debug|x64.ActiveCfg = Debug|x64
 		{0D613F38-E287-4DEB-A4D7-F9FCFAE05A6B}.Debug|x64.Build.0 = Debug|x64
 		{0D613F38-E287-4DEB-A4D7-F9FCFAE05A6B}.Release|x64.ActiveCfg = Release|x64
 		{0D613F38-E287-4DEB-A4D7-F9FCFAE05A6B}.Release|x64.Build.0 = Release|x64
-		{6617F64D-B8BE-4359-ACD9-B5F48934C82D}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{6617F64D-B8BE-4359-ACD9-B5F48934C82D}.Debug|x64.Build.0 = Debug|Any CPU
-		{6617F64D-B8BE-4359-ACD9-B5F48934C82D}.Release|x64.ActiveCfg = Release|Any CPU
-		{6617F64D-B8BE-4359-ACD9-B5F48934C82D}.Release|x64.Build.0 = Release|Any CPU
+		{6617F64D-B8BE-4359-ACD9-B5F48934C82D}.Debug|x64.ActiveCfg = Debug|x64
+		{6617F64D-B8BE-4359-ACD9-B5F48934C82D}.Debug|x64.Build.0 = Debug|x64
+		{6617F64D-B8BE-4359-ACD9-B5F48934C82D}.Release|x64.ActiveCfg = Release|x64
+		{6617F64D-B8BE-4359-ACD9-B5F48934C82D}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

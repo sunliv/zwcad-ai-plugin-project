@@ -7,6 +7,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="ZwManaged">
       <HintPath>$(ZwcadManagedReferenceDir)\ZwManaged.dll</HintPath>
       <Private>false</Private>
@@ -23,5 +28,6 @@
     <ProjectReference Include="..\ZwcadAi.Core\ZwcadAi.Core.csproj" />
     <ProjectReference Include="..\ZwcadAi.Renderer\ZwcadAi.Renderer.csproj" />
     <ProjectReference Include="..\ZwcadAi.AiService\ZwcadAi.AiService.csproj" />
+    <ProjectReference Include="..\ZwcadAi.Ui\ZwcadAi.Ui.csproj" />
   </ItemGroup>
 </Project>

@@ -292,6 +292,25 @@ Implemented and build/test verified against the local source baseline:
 - Automated verification: `dotnet run --project src\ZwcadAi.Tests\ZwcadAi.Tests.csproj -p:Platform=x64` passed 78 tests.
 - Build verification: `dotnet build src\ZwcadAi.Tests\ZwcadAi.Tests.csproj -p:Platform=x64` passed with 0 warnings and 0 errors.
 
+## P5-01 Plugin UI Evidence
+
+Date: 2026-04-29
+
+Implemented and build/test verified against the local source baseline:
+
+- Added `ZwcadAi.Ui` as a UI-facing state mapping project for panel display state; it maps `AiDrawingSpecResponse`, `ValidationResult`, and `RenderResult.Summary` into response kind, clarification questions, issue list, preview counts, layer/type counts, bounds, spec id mappings, and confirm-enabled state.
+- Updated `AIDRAW` so the command opens an AI drawing panel instead of directly rendering the fixed POC sample.
+- Hosted the panel through ZWCAD `PaletteSet`, following the SDK `AddPaletteSet` sample pattern.
+- Added natural-language request input, clarification answer input, status/issues display, preview summary, a minimal parameter/summary table, and a confirm button.
+- Preserved the P4 service boundary: initial requests call `CreateDrawingSpec`; clarification answers call `ContinueDrawingSpecAfterClarification`; UI code does not call `RepairDrawingSpec`.
+- Preserved the DWG write boundary: preview uses a renderer plan/summary only; `ZwcadDrawingWriter` is called only from the confirm button after a valid DrawingSpec and successful preview summary.
+- The confirmation path reuses the renderer plan prepared for preview so the committed plan cannot silently diverge from the displayed preview.
+- Default UI state and logs do not expose full `userRequest`, full `DrawingSpecJson`, or full clarification state. The panel fallback exception path records only exception type and displays a generic failure message.
+- Updated architecture/source layout docs and execution checklist for the new UI state project and P5-01 implementation status.
+- Automated verification: `dotnet build ZwcadAi.sln -p:Platform=x64` passed with 0 warnings and 0 errors, producing the test assembly at `src\ZwcadAi.Tests\bin\x64\Debug\net8.0\ZwcadAi.Tests.dll`.
+- Automated verification: `dotnet .\src\ZwcadAi.Tests\bin\x64\Debug\net8.0\ZwcadAi.Tests.dll` passed 82 tests.
+- Manual ZWCAD visual/runtime verification of `NETLOAD` + `AIDRAW` remains pending.
+
 ## Open Environment Gaps
 
 - ZWCAD 2026 and Windows 10 compatibility validation remain pending for later compatibility work.

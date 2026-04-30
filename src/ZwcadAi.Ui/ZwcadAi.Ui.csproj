@@ -1,15 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
-    <AssemblyName>ZwcadAi.Tests</AssemblyName>
-    <RootNamespace>ZwcadAi.Tests</RootNamespace>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>ZwcadAi.Ui</AssemblyName>
+    <RootNamespace>ZwcadAi.Ui</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\ZwcadAi.Core\ZwcadAi.Core.csproj" />
     <ProjectReference Include="..\ZwcadAi.Renderer\ZwcadAi.Renderer.csproj" />
     <ProjectReference Include="..\ZwcadAi.AiService\ZwcadAi.AiService.csproj" />
-    <ProjectReference Include="..\ZwcadAi.Ui\ZwcadAi.Ui.csproj" />
   </ItemGroup>
 </Project>

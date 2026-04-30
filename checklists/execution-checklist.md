@@ -49,11 +49,11 @@
 
 ## P5 Plugin UI
 
-- [ ] 实现 Dock 面板。
-- [ ] 实现自然语言输入。
-- [ ] 实现参数表。
-- [ ] 实现预览摘要。
-- [ ] 实现确认写入。
+- [x] 实现 Dock 面板（P5-01 代码层接入 ZWCAD `PaletteSet`；仍需 ZWCAD 内手工视觉验收）。
+- [x] 实现自然语言输入。
+- [x] 实现参数表（P5-01 最小 summary/parameter table）。
+- [x] 实现预览摘要。
+- [x] 实现确认写入。
 - [ ] 实现历史记录。
 
 ## P6 Verification

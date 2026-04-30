@@ -11,6 +11,7 @@ using System.Xml.Linq;
 using ZwcadAi.AiService;
 using ZwcadAi.Core;
 using ZwcadAi.Renderer;
+using ZwcadAi.Ui;
 
 namespace ZwcadAi.Tests;
 
@@ -56,6 +57,10 @@ public static class Program
             ("Local AI adapter starts fresh create after clarification follow-up", LocalAiAdapterStartsFreshCreateAfterClarificationFollowUp),
             ("Service flow returns render result summary after clarification", ServiceFlowReturnsRenderResultSummaryAfterClarification),
             ("Local AI adapter never repairs unsafe command responses", LocalAiAdapterNeverRepairsUnsafeCommandResponses),
+            ("AI drawing panel view model maps clarification without sensitive payload", AiDrawingPanelViewModelMapsClarificationWithoutSensitivePayload),
+            ("AI drawing panel view model enables confirm only after renderer preview", AiDrawingPanelViewModelEnablesConfirmOnlyAfterRendererPreview),
+            ("AI drawing panel view model blocks confirm on validation issues", AiDrawingPanelViewModelBlocksConfirmOnValidationIssues),
+            ("AI drawing panel display text localizes runtime values without changing contracts", AiDrawingPanelDisplayTextLocalizesRuntimeValuesWithoutChangingContracts),
             ("Fixed rectangular plate sample matches P1-03 geometry", FixedRectangularPlateSampleMatchesP103Geometry),
             ("DrawingSpec schema accepts valid example files", DrawingSpecSchemaAcceptsValidExampleFiles),
             ("Basic entities combo example validates and plans P3-01 entities", BasicEntitiesComboExampleValidatesAndPlansP301Entities),
@@ -89,7 +94,7 @@ public static class Program
             ("Core project has no ZWCAD runtime references", CoreProjectHasNoZwcadRuntimeReferences),
             ("Plugin references ZWCAD 2025 managed assemblies", PluginReferencesZwcad2025ManagedAssemblies),
             ("Plugin registers AIDRAW command", PluginRegistersAiDrawCommand),
-            ("Plugin AIDRAW uses fixed POC sample and transaction writer", PluginAiDrawUsesFixedPocSampleAndTransactionWriter),
+            ("Plugin AIDRAW opens AI panel without direct DWG writes", PluginAiDrawOpensAiPanelWithoutDirectDwgWrites),
             ("Plugin registers AIEXPORT command", PluginRegistersAiExportCommand),
             ("AIEXPORT saves a DWG copy without saving the active drawing", PluginAiExportSavesDwgCopyWithoutSavingActiveDrawing),
             ("AIEXPORT covers the PDF plot-to-file path", PluginAiExportCoversPdfPlotToFilePath),
@@ -1550,6 +1555,157 @@ public static class Program
             $"Unsafe command output must remain outside the repair loop: {FormatModelIssues(response.Issues)}");
     }
 
+    private static void AiDrawingPanelViewModelMapsClarificationWithoutSensitivePayload()
+    {
+        var response = new AiDrawingSpecResponse
+        {
+            Kind = AiDrawingSpecResponseKind.NeedsClarification,
+            DrawingSpecJson = "{\"secret\":\"full-spec-json\"}",
+            Clarifications = new[] { "Please provide plate width.", "Please provide plate height." },
+            ClarificationState = new AiDrawingSpecClarificationState
+            {
+                RequestId = "p5-clarification",
+                OriginalUserRequest = "SECRET original user request",
+                ClarificationQuestions = new[] { "Please provide plate width.", "Please provide plate height." },
+                PromptVersion = ModelPromptContract.PromptVersion
+            },
+            Validation = ValidationResult.Success(),
+            Issues = new[]
+            {
+                new AiModelIssue(
+                    AiIssueCodes.NeedsClarification,
+                    "$.clarifications",
+                    "Model needs more engineering parameters.",
+                    ValidationSeverity.Error,
+                    AiModelIssueSource.UserClarification,
+                    repairable: false)
+            }
+        };
+
+        var state = AiDrawingPanelStateMapper.FromResponse(response);
+        var statePropertyNames = typeof(AiDrawingPanelState)
+            .GetProperties()
+            .Select(property => property.Name)
+            .ToArray();
+
+        AssertEqual(AiDrawingSpecResponseKind.NeedsClarification, state.ResponseKind);
+        AssertSequenceEqual(response.Clarifications, state.ClarificationQuestions);
+        Assert(!state.ConfirmEnabled, "Clarification states must not enable DWG writes.");
+        Assert(state.Preview == null, "Clarification states must not expose a renderer preview summary.");
+        AssertEqual(1, state.Issues.Count);
+        AssertEqual(AiIssueCodes.NeedsClarification, state.Issues[0].Code);
+        AssertEqual("$.clarifications", state.Issues[0].Path);
+        AssertEqual("UserClarification", state.Issues[0].Source);
+        Assert(!statePropertyNames.Contains("UserRequest", StringComparer.Ordinal), "Panel state must not expose the full natural-language request.");
+        Assert(!statePropertyNames.Contains("OriginalUserRequest", StringComparer.Ordinal), "Panel state must not expose the original clarification request.");
+        Assert(!statePropertyNames.Contains("DrawingSpecJson", StringComparer.Ordinal), "Panel state must not expose full DrawingSpec JSON by default.");
+        Assert(!statePropertyNames.Contains("Spec", StringComparer.Ordinal), "Panel display state must not expose the full DrawingSpec object.");
+    }
+
+    private static void AiDrawingPanelViewModelEnablesConfirmOnlyAfterRendererPreview()
+    {
+        var adapter = new LocalAiDrawingSpecAdapter(new StaticAiModelClient(ReadExampleJson("rectangular-plate.example.json")));
+        var response = adapter.CreateDrawingSpec(new AiDrawingSpecRequest
+        {
+            RequestId = "p5-preview",
+            UserRequest = "Draw a 100 by 60 rectangular plate with a centered hole."
+        });
+        AssertEqual(AiDrawingSpecResponseKind.DrawingSpec, response.Kind);
+
+        var renderer = new DrawingSpecPlanRenderer();
+        var preview = renderer.Render(response.Spec!, new RenderContext("p5-preview", ModelPromptContract.LayerStandard));
+        var state = AiDrawingPanelStateMapper.FromResponse(response, preview);
+
+        Assert(state.ConfirmEnabled, "A valid DrawingSpec with a successful renderer preview must enable user confirmation.");
+        Assert(state.Preview != null, "Successful DrawingSpec responses must expose a preview summary.");
+        AssertEqual(RenderStatus.Success, state.Preview!.Status);
+        AssertEqual(4, state.Preview.EntityCount);
+        AssertEqual(3, state.Preview.DimensionCount);
+        AssertEqual(7, state.Preview.CadObjectCount);
+        AssertEqual(112d, state.Preview.Bounds!.Width);
+        AssertEqual(72d, state.Preview.Bounds.Height);
+        AssertEqual(2, state.Preview.LayerCounts["OUTLINE"]);
+        Assert(state.Preview.SpecIdMappings.ContainsKey("outer-profile"), "Preview summary must map stable DrawingSpec ids.");
+        Assert(state.Issues.Count == 0, $"Valid preview state should not surface issues: {FormatPanelIssues(state.Issues)}");
+    }
+
+    private static void AiDrawingPanelViewModelBlocksConfirmOnValidationIssues()
+    {
+        var response = new AiDrawingSpecResponse
+        {
+            Kind = AiDrawingSpecResponseKind.Rejected,
+            Validation = ValidationResult.Failure(new[]
+            {
+                new ValidationIssue(
+                    "missing_required_layer",
+                    "$.layers[CENTER]",
+                    "Layer CENTER is required.",
+                    ValidationSeverity.Error)
+            }),
+            Issues = new[]
+            {
+                new AiModelIssue(
+                    "missing_required_layer",
+                    "$.layers[CENTER]",
+                    "Layer CENTER is required.",
+                    ValidationSeverity.Error,
+                    AiModelIssueSource.BusinessValidation,
+                    repairable: true)
+            }
+        };
+
+        var state = AiDrawingPanelStateMapper.FromResponse(response);
+
+        AssertEqual(AiDrawingSpecResponseKind.Rejected, state.ResponseKind);
+        Assert(!state.ConfirmEnabled, "Rejected or invalid responses must not enable DWG writes.");
+        Assert(state.Preview == null, "Rejected responses must not expose a preview summary.");
+        AssertEqual(1, state.Issues.Count);
+        AssertEqual("missing_required_layer", state.Issues[0].Code);
+        AssertEqual("$.layers[CENTER]", state.Issues[0].Path);
+        AssertEqual("BusinessValidation", state.Issues[0].Source);
+        Assert(state.Issues[0].Repairable, "Repairability should be visible as issue metadata, not as an automatic UI action.");
+    }
+
+    private static void AiDrawingPanelDisplayTextLocalizesRuntimeValuesWithoutChangingContracts()
+    {
+        AssertEqual("已生成图纸规格", AiDrawingPanelDisplayText.FormatResponseKind(AiDrawingSpecResponseKind.DrawingSpec));
+        AssertEqual("需要补充参数", AiDrawingPanelDisplayText.FormatResponseKind(AiDrawingSpecResponseKind.NeedsClarification));
+        AssertEqual("请求被拒绝", AiDrawingPanelDisplayText.FormatResponseKind(AiDrawingSpecResponseKind.Rejected));
+        AssertEqual("未知", AiDrawingPanelDisplayText.FormatResponseKind(AiDrawingSpecResponseKind.Unknown));
+
+        AssertEqual("成功", AiDrawingPanelDisplayText.FormatRenderStatus(RenderStatus.Success));
+        AssertEqual("失败", AiDrawingPanelDisplayText.FormatRenderStatus(RenderStatus.Failed));
+        AssertEqual("已取消", AiDrawingPanelDisplayText.FormatRenderStatus(RenderStatus.Canceled));
+
+        AssertEqual("错误", AiDrawingPanelDisplayText.FormatIssueSeverity(ValidationSeverity.Error.ToString()));
+        AssertEqual("警告", AiDrawingPanelDisplayText.FormatIssueSeverity(ValidationSeverity.Warning.ToString()));
+        AssertEqual("Info", AiDrawingPanelDisplayText.FormatIssueSeverity("Info"));
+
+        AssertEqual("模型响应", AiDrawingPanelDisplayText.FormatIssueSource(AiModelIssueSource.ModelResponse.ToString()));
+        AssertEqual("Schema 校验", AiDrawingPanelDisplayText.FormatIssueSource(AiModelIssueSource.SchemaValidation.ToString()));
+        AssertEqual("业务规则校验", AiDrawingPanelDisplayText.FormatIssueSource(AiModelIssueSource.BusinessValidation.ToString()));
+        AssertEqual("渲染器", AiDrawingPanelDisplayText.FormatIssueSource(AiModelIssueSource.Renderer.ToString()));
+        AssertEqual("用户澄清", AiDrawingPanelDisplayText.FormatIssueSource(AiModelIssueSource.UserClarification.ToString()));
+        AssertEqual("服务", AiDrawingPanelDisplayText.FormatIssueSource(AiModelIssueSource.Service.ToString()));
+        AssertEqual("校验", AiDrawingPanelDisplayText.FormatIssueSource("Validation"));
+        AssertEqual("CustomSource", AiDrawingPanelDisplayText.FormatIssueSource("CustomSource"));
+
+        AssertEqual("未请求", AiDrawingPanelDisplayText.FormatExportStatus(string.Empty));
+        AssertEqual("未请求", AiDrawingPanelDisplayText.FormatExportStatus("not_requested"));
+        AssertEqual("已导出", AiDrawingPanelDisplayText.FormatExportStatus("exported"));
+        AssertEqual("已导出", AiDrawingPanelDisplayText.FormatExportStatus("success"));
+        AssertEqual("不可用", AiDrawingPanelDisplayText.FormatExportStatus("unavailable"));
+        AssertEqual("custom_status", AiDrawingPanelDisplayText.FormatExportStatus("custom_status"));
+
+        AssertEqual("DrawingSpec", AiDrawingSpecResponseKind.DrawingSpec.ToString());
+        AssertEqual("NeedsClarification", AiDrawingSpecResponseKind.NeedsClarification.ToString());
+        AssertEqual("Rejected", AiDrawingSpecResponseKind.Rejected.ToString());
+        AssertEqual("Success", RenderStatus.Success.ToString());
+        AssertEqual("Canceled", RenderStatus.Canceled.ToString());
+        AssertEqual("Error", ValidationSeverity.Error.ToString());
+        AssertEqual("BusinessValidation", AiModelIssueSource.BusinessValidation.ToString());
+    }
+
     private static void FixedRectangularPlateSampleMatchesP103Geometry()
     {
         var spec = RectangularPlateSample.Create();
@@ -2389,6 +2545,7 @@ public static class Program
         var coreRefs = ReadProjectReferences(Path.Combine(root, "src", "ZwcadAi.Core", "ZwcadAi.Core.csproj"));
         var rendererRefs = ReadProjectReferences(Path.Combine(root, "src", "ZwcadAi.Renderer", "ZwcadAi.Renderer.csproj"));
         var aiRefs = ReadProjectReferences(Path.Combine(root, "src", "ZwcadAi.AiService", "ZwcadAi.AiService.csproj"));
+        var uiRefs = ReadProjectReferences(Path.Combine(root, "src", "ZwcadAi.Ui", "ZwcadAi.Ui.csproj"));
         var pluginRefs = ReadProjectReferences(Path.Combine(root, "src", "ZwcadAiPlugin", "ZwcadAiPlugin.csproj"));
 
         AssertEqual(0, coreRefs.Count);
@@ -2396,6 +2553,9 @@ public static class Program
         AssertSequenceEqual(new[] { "ZwcadAi.Core.csproj" }, aiRefs);
         AssertSequenceEqual(
             new[] { "ZwcadAi.Core.csproj", "ZwcadAi.Renderer.csproj", "ZwcadAi.AiService.csproj" },
+            uiRefs);
+        AssertSequenceEqual(
+            new[] { "ZwcadAi.Core.csproj", "ZwcadAi.Renderer.csproj", "ZwcadAi.AiService.csproj", "ZwcadAi.Ui.csproj" },
             pluginRefs);
     }
 
@@ -2450,19 +2610,96 @@ public static class Program
             "Plugin runtime status must report CAD load readiness.");
     }
 
-    private static void PluginAiDrawUsesFixedPocSampleAndTransactionWriter()
+    private static void PluginAiDrawOpensAiPanelWithoutDirectDwgWrites()
     {
         var source = ReadPluginSource();
+        var aiDrawSource = ReadPluginCommandSource(PluginCommandCatalogForTests.AiDraw);
 
         Assert(
-            source.Contains("RectangularPlateSample.Create()", StringComparison.Ordinal),
-            "AIDRAW must load the fixed P1-03 rectangular plate sample before AI integration exists.");
+            aiDrawSource.Contains("AiDrawingPanelHost.Show()", StringComparison.Ordinal),
+            "AIDRAW must open the AI drawing Dock panel.");
         Assert(
-            source.Contains("ZwcadDrawingWriter", StringComparison.Ordinal),
-            "AIDRAW must use the ZWCAD transaction writer for the POC render.");
+            source.Contains("PaletteSet", StringComparison.Ordinal)
+                && source.Contains("_paletteSet.Add", StringComparison.Ordinal),
+            "AIDRAW must host the AI drawing panel in a ZWCAD PaletteSet dock panel.");
+        Assert(
+            source.Contains("KeepFocus = true", StringComparison.Ordinal),
+            "The AI drawing PaletteSet must keep keyboard focus so Chinese IME input is not captured by the CAD command line.");
+
+        var localizedPanelStrings = new[]
+        {
+            "AI 绘图",
+            "绘图需求",
+            "生成",
+            "补充说明",
+            "继续生成",
+            "状态",
+            "摘要",
+            "问题",
+            "预览",
+            "参数",
+            "确认写入",
+            "就绪。",
+            "请输入绘图需求。",
+            "请输入补充说明。",
+            "当前没有可继续的澄清状态。",
+            "预览通过后才能确认写入。",
+            "暂无问题。",
+            "暂无预览。",
+            "已生成图纸规格",
+            "需要补充参数",
+            "请求被拒绝",
+            "响应类型",
+            "渲染状态",
+            "导出：",
+            "写入前已取消。",
+            "写入失败，已回滚。"
+        };
+
+        foreach (var localizedPanelString in localizedPanelStrings)
+        {
+            Assert(
+                source.Contains(localizedPanelString, StringComparison.Ordinal),
+                $"The panel must keep localized UI text '{localizedPanelString}'.");
+        }
+
+        Assert(
+            source.Contains("DataGridView", StringComparison.Ordinal)
+                && source.Contains("PopulateParameterGrid", StringComparison.Ordinal),
+            "The panel must include a parameter/summary table for generated drawing state.");
+        Assert(
+            source.Contains("ImeMode = ImeMode.On", StringComparison.Ordinal)
+                && source.Contains("BindTextInputFocus", StringComparison.Ordinal),
+            "Editable panel text boxes must opt into IME input and explicitly keep focus while users type natural-language Chinese.");
+        Assert(
+            source.Contains("需补充的问题：", StringComparison.Ordinal),
+            "The panel must render clarification questions so users can see missing parameters.");
+        Assert(
+            !aiDrawSource.Contains("RectangularPlateSample.Create()", StringComparison.Ordinal),
+            "P5 AIDRAW must no longer write the fixed POC sample directly.");
+        Assert(
+            !aiDrawSource.Contains("ZwcadDrawingWriter", StringComparison.Ordinal),
+            "AIDRAW command entry must not call the writer before user confirmation.");
+        Assert(
+            source.Contains("ContinueDrawingSpecAfterClarification", StringComparison.Ordinal),
+            "The panel must route clarification answers through the service follow-up method.");
+        Assert(
+            !source.Contains("RepairDrawingSpec(", StringComparison.Ordinal),
+            "The panel must not route clarification answers or UI actions through RepairDrawingSpec.");
+        Assert(
+            source.Contains("ConfirmButton_Click", StringComparison.Ordinal)
+                && source.Contains("new ZwcadDrawingWriter().Render", StringComparison.Ordinal),
+            "The panel must keep DWG writes behind the explicit confirmation button.");
+        Assert(
+            source.Contains("_currentPreviewPlan", StringComparison.Ordinal)
+                && source.Contains("var plan = _currentPreviewPlan", StringComparison.Ordinal),
+            "The panel must confirm the renderer plan prepared for preview rather than silently changing plans.");
+        Assert(
+            source.Contains("AI drawing panel failed: {exception.GetType().Name}", StringComparison.Ordinal),
+            "The panel fallback exception path must not display or log arbitrary service exception messages.");
         Assert(
             source.Contains("StartTransaction()", StringComparison.Ordinal),
-            "P1-03 CAD writes must be wrapped in a transaction for rollback on failure.");
+            "Confirmed CAD writes must still be wrapped in a transaction for rollback on failure.");
     }
 
     private static void PluginRegistersAiExportCommand()
@@ -2553,7 +2790,7 @@ public static class Program
                 && source.Contains("plannedDimension.SpecDimensionId", StringComparison.Ordinal),
             "Dimension writer failures must locate stable DrawingSpec dimension ids.");
         Assert(
-            source.Contains("render failed and was rolled back", StringComparison.Ordinal),
+            source.Contains("写入失败，已回滚", StringComparison.Ordinal),
             "AIDRAW must report writer failures as rolled-back render results.");
     }
 
@@ -2936,6 +3173,22 @@ public static class Program
                 .Select(File.ReadAllText));
     }
 
+    private static string ReadPluginCommandSource(string commandMethodName)
+    {
+        var source = ReadPluginSource();
+        var marker = $"public void {commandMethodName}()";
+        var start = source.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            throw new InvalidOperationException($"Plugin command method '{commandMethodName}' was not found.");
+        }
+
+        var nextCommand = source.IndexOf("[CommandMethod(", start + marker.Length, StringComparison.Ordinal);
+        return nextCommand < 0
+            ? source.Substring(start)
+            : source.Substring(start, nextCommand - start);
+    }
+
     private static IReadOnlyList<string> ReadProjectReferences(string projectPath)
     {
         var document = XDocument.Load(projectPath);
@@ -3101,6 +3354,18 @@ public static class Program
         return string.Join(
             "; ",
             issues.Select(issue => $"{issue.Code} from {issue.Source} at {issue.Path}: {issue.Message}"));
+    }
+
+    private static string FormatPanelIssues(IEnumerable<AiDrawingPanelIssue> issues)
+    {
+        return string.Join(
+            "; ",
+            issues.Select(issue => $"{issue.Code} from {issue.Source} at {issue.Path}: {issue.Message}"));
+    }
+
+    private static class PluginCommandCatalogForTests
+    {
+        public const string AiDraw = "AiDraw";
     }
 
     private static void AssertSequenceEqual<T>(IReadOnlyList<T> expected, IReadOnlyList<T> actual)

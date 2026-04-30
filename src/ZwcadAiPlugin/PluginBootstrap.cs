@@ -43,39 +43,8 @@ public sealed class PluginCommands
     {
         try
         {
-            var status = new PluginBootstrap().GetStatus();
-            var spec = RectangularPlateSample.Create();
-            var renderer = new DrawingSpecPlanRenderer();
-            var plan = renderer.CreatePlan(spec);
-
-            if (!plan.Validation.IsValid)
-            {
-                var errors = string.Join(
-                    "; ",
-                    plan.Validation.Issues.Select(issue => $"{issue.Code} at {issue.Path}: {issue.Message}"));
-                CadLog.WriteInfo($"{status.Command} POC sample validation failed: {errors}");
-                return;
-            }
-
-            var renderResult = new ZwcadDrawingWriter().Render(plan);
-            if (renderResult.Canceled)
-            {
-                CadLog.WriteInfo($"{status.Command} render canceled before committing CAD entities.");
-                return;
-            }
-
-            if (!renderResult.Success)
-            {
-                var errors = string.Join(
-                    "; ",
-                    renderResult.Validation.Issues.Select(issue => $"{issue.Code} at {issue.Path}: {issue.Message}"));
-                CadLog.WriteInfo($"{status.Command} render failed and was rolled back: {errors}");
-                return;
-            }
-
-            CadLog.WriteInfo(
-                $"{status.Product}: {status.Command} rendered fixed {status.Domain} POC sample "
-                + $"'{spec.Metadata.RequestId}' with {renderResult.Entities.Count} CAD entities.");
+            AiDrawingPanelHost.Show();
+            CadLog.WriteInfo($"{PluginCommandCatalog.AiDraw} opened AI drawing panel.");
         }
         catch (System.Exception exception)
         {

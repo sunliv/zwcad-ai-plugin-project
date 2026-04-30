@@ -8,6 +8,7 @@ This source tree follows `docs/architecture.md`.
 | `ZwcadAi.Core` | DrawingSpec models, validation result types, domain constants, shared errors | Must not reference ZWCAD runtime assemblies |
 | `ZwcadAi.Renderer` | Renderer contracts and deterministic render result types | Does not interpret natural language |
 | `ZwcadAi.AiService` | AI request/response contracts and model adapter interfaces | Must not mutate DWG documents |
+| `ZwcadAi.Ui` | UI-facing panel state and preview summary mapping | Must not reference ZWCAD runtime assemblies or own CAD writes |
 | `ZwcadAi.Tests` | Lightweight architecture and contract tests without production secrets | Does not load ZWCAD, but can verify configured ZWCAD project references |
 
 ## P1-02 ZWCAD 2025 plugin build
