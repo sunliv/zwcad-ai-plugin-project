@@ -1,0 +1,271 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zwcad-ai.local/specs/cad-intent-spec-v1.schema.json",
+  "title": "CadIntentSpec v1",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/templateIntent" },
+    { "$ref": "#/$defs/compositeIntent" },
+    { "$ref": "#/$defs/sketchIntent" }
+  ],
+  "$defs": {
+    "baseRoot": {
+      "type": "object",
+      "required": ["cadIntentSpecVersion", "intentType", "domainPack", "units"],
+      "properties": {
+        "cadIntentSpecVersion": {
+          "const": "1.0"
+        },
+        "intentType": {
+          "enum": ["TemplateIntent", "CompositeIntent", "SketchIntent"]
+        },
+        "domainPack": {
+          "type": "string",
+          "minLength": 1
+        },
+        "units": {
+          "const": "mm"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "templateIntent": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRoot" },
+        {
+          "type": "object",
+          "required": ["template", "parameters"],
+          "properties": {
+            "intentType": {
+              "const": "TemplateIntent"
+            },
+            "domainPack": {
+              "const": "mechanical_plate"
+            },
+            "template": {
+              "const": "rectangular_plate"
+            },
+            "parameters": {
+              "type": "object",
+              "required": ["length", "width"],
+              "properties": {
+                "length": { "$ref": "#/$defs/positiveNumber" },
+                "width": { "$ref": "#/$defs/positiveNumber" },
+                "thicknessNote": { "type": "string" },
+                "cornerRadius": { "$ref": "#/$defs/positiveNumber" }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "compositeIntent": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRoot" },
+        {
+          "type": "object",
+          "required": ["baseProfile"],
+          "properties": {
+            "intentType": {
+              "const": "CompositeIntent"
+            },
+            "domainPack": {
+              "const": "mechanical_plate"
+            },
+            "baseProfile": {
+              "type": "object",
+              "required": ["type", "size"],
+              "properties": {
+                "type": {
+                  "const": "rectangle"
+                },
+                "size": {
+                  "type": "object",
+                  "required": ["length", "width"],
+                  "properties": {
+                    "length": { "$ref": "#/$defs/positiveNumber" },
+                    "width": { "$ref": "#/$defs/positiveNumber" }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": true
+            },
+            "features": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/compositeFeature" }
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "sketchIntent": {
+      "allOf": [
+        { "$ref": "#/$defs/baseRoot" },
+        {
+          "type": "object",
+          "required": ["profile"],
+          "properties": {
+            "intentType": {
+              "const": "SketchIntent"
+            },
+            "domainPack": {
+              "const": "generic_2d_mechanical"
+            },
+            "profile": {
+              "type": "object",
+              "required": ["closed", "segments"],
+              "properties": {
+                "closed": {
+                  "const": true
+                },
+                "segments": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "$ref": "#/$defs/sketchSegment" }
+                }
+              },
+              "additionalProperties": true
+            },
+            "features": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/sketchFeature" }
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "compositeFeature": {
+      "oneOf": [
+        { "$ref": "#/$defs/holeFeature" },
+        { "$ref": "#/$defs/slotFeature" },
+        { "$ref": "#/$defs/filletFeature" },
+        { "$ref": "#/$defs/centerMarkFeature" }
+      ]
+    },
+    "sketchFeature": {
+      "oneOf": [
+        { "$ref": "#/$defs/holeFeature" },
+        { "$ref": "#/$defs/slotFeature" },
+        { "$ref": "#/$defs/textFeature" },
+        { "$ref": "#/$defs/mtextFeature" }
+      ]
+    },
+    "holeFeature": {
+      "type": "object",
+      "required": ["type", "center", "diameter"],
+      "properties": {
+        "type": { "const": "hole" },
+        "id": { "type": "string" },
+        "center": { "$ref": "#/$defs/point2d" },
+        "diameter": { "$ref": "#/$defs/positiveNumber" }
+      },
+      "additionalProperties": true
+    },
+    "slotFeature": {
+      "type": "object",
+      "required": ["type", "center", "length", "width", "angle"],
+      "properties": {
+        "type": { "const": "slot" },
+        "id": { "type": "string" },
+        "center": { "$ref": "#/$defs/point2d" },
+        "length": { "$ref": "#/$defs/positiveNumber" },
+        "width": { "$ref": "#/$defs/positiveNumber" },
+        "angle": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "filletFeature": {
+      "type": "object",
+      "required": ["type", "radius"],
+      "properties": {
+        "type": { "const": "fillet" },
+        "id": { "type": "string" },
+        "radius": { "$ref": "#/$defs/positiveNumber" }
+      },
+      "additionalProperties": true
+    },
+    "centerMarkFeature": {
+      "type": "object",
+      "required": ["type", "center"],
+      "properties": {
+        "type": { "enum": ["centerMark", "center_mark"] },
+        "id": { "type": "string" },
+        "center": { "$ref": "#/$defs/point2d" }
+      },
+      "additionalProperties": true
+    },
+    "textFeature": {
+      "type": "object",
+      "required": ["type", "position", "value"],
+      "properties": {
+        "type": { "const": "text" },
+        "id": { "type": "string" },
+        "position": { "$ref": "#/$defs/point2d" },
+        "value": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "mtextFeature": {
+      "type": "object",
+      "required": ["type", "position", "value"],
+      "properties": {
+        "type": { "const": "mtext" },
+        "id": { "type": "string" },
+        "position": { "$ref": "#/$defs/point2d" },
+        "value": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "sketchSegment": {
+      "oneOf": [
+        { "$ref": "#/$defs/lineSegment" },
+        { "$ref": "#/$defs/arcSegment" }
+      ]
+    },
+    "lineSegment": {
+      "type": "object",
+      "required": ["type", "start", "end"],
+      "properties": {
+        "type": { "const": "line" },
+        "start": { "$ref": "#/$defs/point2d" },
+        "end": { "$ref": "#/$defs/point2d" }
+      },
+      "additionalProperties": true
+    },
+    "arcSegment": {
+      "type": "object",
+      "required": ["type", "start", "end", "center", "radius", "startAngle", "endAngle"],
+      "properties": {
+        "type": { "const": "arc" },
+        "start": { "$ref": "#/$defs/point2d" },
+        "end": { "$ref": "#/$defs/point2d" },
+        "center": { "$ref": "#/$defs/point2d" },
+        "radius": { "$ref": "#/$defs/positiveNumber" },
+        "startAngle": { "type": "number" },
+        "endAngle": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "point2d": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        { "type": "number" },
+        { "type": "number" }
+      ]
+    },
+    "positiveNumber": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  }
+}

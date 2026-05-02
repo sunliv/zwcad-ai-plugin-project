@@ -22,6 +22,17 @@ public static class Program
         var tests = new List<(string Name, Action Execute)>
         {
             ("Core uses the locked MVP domain", CoreUsesLockedMvpDomain),
+            ("CadIntent classifier recognizes TemplateIntent", CadIntentClassifierRecognizesTemplateIntent),
+            ("CadIntent classifier recognizes CompositeIntent", CadIntentClassifierRecognizesCompositeIntent),
+            ("CadIntent classifier recognizes SketchIntent", CadIntentClassifierRecognizesSketchIntent),
+            ("CadIntent classifier recognizes DrawingSpec advanced input", CadIntentClassifierRecognizesDrawingSpecAdvancedInput),
+            ("CadIntent validator returns stable missing parameter issues", CadIntentValidatorReturnsStableMissingParameterIssues),
+            ("CadIntent validator returns stable unsupported domain issue", CadIntentValidatorReturnsStableUnsupportedDomainIssue),
+            ("CadIntent validator returns stable unsupported template issue", CadIntentValidatorReturnsStableUnsupportedTemplateIssue),
+            ("CadIntent validator returns stable unsupported feature issue", CadIntentValidatorReturnsStableUnsupportedFeatureIssue),
+            ("CadIntent validator returns stable unsupported segment issue", CadIntentValidatorReturnsStableUnsupportedSegmentIssue),
+            ("CadIntent validator returns stable profile not closed issue", CadIntentValidatorReturnsStableProfileNotClosedIssue),
+            ("CadIntent validator rejects unsupported JSON contract", CadIntentValidatorRejectsUnsupportedJsonContract),
             ("AI request defaults to P4 model prompt contract", AiRequestDefaultsToP4ModelPromptContract),
             ("AI repair request excludes original request payload", AiRepairRequestExcludesOriginalRequestPayload),
             ("AI clarification state excludes drawing context", AiClarificationStateExcludesDrawingContext),
@@ -118,6 +129,181 @@ public static class Program
     private static void CoreUsesLockedMvpDomain()
     {
         AssertEqual("mechanical_plate", DrawingDomain.MechanicalPlate);
+    }
+
+    private static void CadIntentClassifierRecognizesTemplateIntent()
+    {
+        var result = CadJsonInputClassifier.Classify(ValidTemplateIntentJson());
+
+        AssertEqual(CadJsonInputKind.TemplateIntent, result.Kind);
+        Assert(result.Validation.IsValid, FormatIssues(result.Validation.Issues));
+    }
+
+    private static void CadIntentClassifierRecognizesCompositeIntent()
+    {
+        var result = CadJsonInputClassifier.Classify(ValidCompositeIntentJson());
+
+        AssertEqual(CadJsonInputKind.CompositeIntent, result.Kind);
+        Assert(result.Validation.IsValid, FormatIssues(result.Validation.Issues));
+    }
+
+    private static void CadIntentClassifierRecognizesSketchIntent()
+    {
+        var result = CadJsonInputClassifier.Classify(ValidSketchIntentJson());
+
+        AssertEqual(CadJsonInputKind.SketchIntent, result.Kind);
+        Assert(result.Validation.IsValid, FormatIssues(result.Validation.Issues));
+    }
+
+    private static void CadIntentClassifierRecognizesDrawingSpecAdvancedInput()
+    {
+        var result = CadJsonInputClassifier.Classify(ReadExampleJson("rectangular-plate.example.json"));
+
+        AssertEqual(CadJsonInputKind.DrawingSpec, result.Kind);
+        Assert(result.Validation.IsValid, FormatIssues(result.Validation.Issues));
+    }
+
+    private static void CadIntentValidatorReturnsStableMissingParameterIssues()
+    {
+        var result = CadJsonInputClassifier.Classify("""
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "TemplateIntent",
+          "domainPack": "mechanical_plate",
+          "units": "mm",
+          "template": "rectangular_plate",
+          "parameters": {
+            "width": 300
+          }
+        }
+        """);
+
+        AssertEqual(CadJsonInputKind.TemplateIntent, result.Kind);
+        AssertIssue(result.Validation, CadIntentIssueCodes.MissingRequiredParameter, "$.parameters.length");
+        Assert(result.Clarifications.Count > 0, "Missing key CadIntent parameters should return clarification prompts.");
+    }
+
+    private static void CadIntentValidatorReturnsStableUnsupportedDomainIssue()
+    {
+        var result = CadJsonInputClassifier.Classify("""
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "TemplateIntent",
+          "domainPack": "architecture",
+          "units": "mm",
+          "template": "rectangular_plate",
+          "parameters": {
+            "length": 1200,
+            "width": 300
+          }
+        }
+        """);
+
+        AssertIssue(result.Validation, CadIntentIssueCodes.UnsupportedDomainPack, "$.domainPack");
+    }
+
+    private static void CadIntentValidatorReturnsStableUnsupportedTemplateIssue()
+    {
+        var result = CadJsonInputClassifier.Classify("""
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "TemplateIntent",
+          "domainPack": "mechanical_plate",
+          "units": "mm",
+          "template": "gear",
+          "parameters": {
+            "length": 1200,
+            "width": 300
+          }
+        }
+        """);
+
+        AssertIssue(result.Validation, CadIntentIssueCodes.UnsupportedTemplate, "$.template");
+    }
+
+    private static void CadIntentValidatorReturnsStableUnsupportedFeatureIssue()
+    {
+        var result = CadJsonInputClassifier.Classify("""
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "CompositeIntent",
+          "domainPack": "mechanical_plate",
+          "units": "mm",
+          "baseProfile": {
+            "type": "rectangle",
+            "size": {
+              "length": 1200,
+              "width": 300
+            }
+          },
+          "features": [
+            {
+              "type": "threaded_hole",
+              "center": [200, 150],
+              "diameter": 20
+            }
+          ]
+        }
+        """);
+
+        AssertIssue(result.Validation, CadIntentIssueCodes.UnsupportedFeatureType, "$.features[0].type");
+    }
+
+    private static void CadIntentValidatorReturnsStableUnsupportedSegmentIssue()
+    {
+        var result = CadJsonInputClassifier.Classify("""
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "SketchIntent",
+          "domainPack": "generic_2d_mechanical",
+          "units": "mm",
+          "profile": {
+            "closed": true,
+            "segments": [
+              { "type": "spline", "start": [0, 0], "end": [100, 0] }
+            ]
+          }
+        }
+        """);
+
+        AssertIssue(result.Validation, CadIntentIssueCodes.UnsupportedSegmentType, "$.profile.segments[0].type");
+    }
+
+    private static void CadIntentValidatorReturnsStableProfileNotClosedIssue()
+    {
+        var result = CadJsonInputClassifier.Classify("""
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "SketchIntent",
+          "domainPack": "generic_2d_mechanical",
+          "units": "mm",
+          "profile": {
+            "closed": true,
+            "segments": [
+              { "type": "line", "start": [0, 0], "end": [100, 0] },
+              { "type": "line", "start": [100, 0], "end": [100, 50] },
+              { "type": "line", "start": [100, 50], "end": [0, 50] }
+            ]
+          }
+        }
+        """);
+
+        AssertIssue(result.Validation, CadIntentIssueCodes.ProfileNotClosed, "$.profile");
+        Assert(result.Clarifications.Count > 0, "Open SketchIntent profiles should return clarification prompts.");
+    }
+
+    private static void CadIntentValidatorRejectsUnsupportedJsonContract()
+    {
+        var result = CadJsonInputClassifier.Classify("""
+        {
+          "version": "1.0",
+          "kind": "freeform-cad-command",
+          "command": "draw a plate"
+        }
+        """);
+
+        AssertEqual(CadJsonInputKind.Unsupported, result.Kind);
+        AssertIssue(result.Validation, CadIntentIssueCodes.UnsupportedJsonContract, "$");
     }
 
     private static void AiRequestDefaultsToP4ModelPromptContract()
@@ -3255,6 +3441,13 @@ public static class Program
         }
     }
 
+    private static void AssertIssue(ValidationResult result, string code, string path)
+    {
+        Assert(
+            result.Issues.Any(issue => issue.Code == code && issue.Path == path),
+            $"Expected issue {code} at {path}. Actual issues: {FormatIssues(result.Issues)}");
+    }
+
     private static void AssertPoint(double expectedX, double expectedY, DrawingPoint? actual)
     {
         if (actual == null)
@@ -3338,6 +3531,79 @@ public static class Program
           ],
           "dimensions": [],
           "clarifications": []
+        }
+        """;
+    }
+
+    private static string ValidTemplateIntentJson()
+    {
+        return """
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "TemplateIntent",
+          "domainPack": "mechanical_plate",
+          "units": "mm",
+          "template": "rectangular_plate",
+          "parameters": {
+            "length": 1200,
+            "width": 300
+          }
+        }
+        """;
+    }
+
+    private static string ValidCompositeIntentJson()
+    {
+        return """
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "CompositeIntent",
+          "domainPack": "mechanical_plate",
+          "units": "mm",
+          "baseProfile": {
+            "type": "rectangle",
+            "size": {
+              "length": 1200,
+              "width": 300
+            }
+          },
+          "features": [
+            {
+              "type": "hole",
+              "id": "hole-1",
+              "center": [200, 150],
+              "diameter": 20
+            }
+          ]
+        }
+        """;
+    }
+
+    private static string ValidSketchIntentJson()
+    {
+        return """
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "SketchIntent",
+          "domainPack": "generic_2d_mechanical",
+          "units": "mm",
+          "profile": {
+            "closed": true,
+            "segments": [
+              { "type": "line", "start": [0, 0], "end": [100, 0] },
+              { "type": "line", "start": [100, 0], "end": [100, 50] },
+              { "type": "line", "start": [100, 50], "end": [0, 50] },
+              { "type": "line", "start": [0, 50], "end": [0, 0] }
+            ]
+          },
+          "features": [
+            {
+              "type": "hole",
+              "id": "hole-1",
+              "center": [50, 25],
+              "diameter": 10
+            }
+          ]
         }
         """;
     }

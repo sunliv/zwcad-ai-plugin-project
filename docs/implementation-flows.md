@@ -1,5 +1,22 @@
 # Implementation Flows
 
+## Flow 0: Pasted CadIntent JSON Drawing
+
+1. 用户在外部 AI 软件中启用领域 skill，或人工编写 CadIntent JSON。
+2. 用户运行 `AIDRAW`。
+3. 插件打开 Dock 面板，默认进入“粘贴 JSON / 校验预览”路径。
+4. 用户粘贴 JSON。
+5. 插件识别输入类型：`TemplateIntent`、`CompositeIntent`、`SketchIntent` 或完整 `DrawingSpec`。
+6. 如果输入是 CadIntent，插件先执行 intent 校验，再通过对应领域包编译为 DrawingSpec。
+7. 如果输入是 DrawingSpec，插件直接进入现有 DrawingSpec 校验链路。
+8. 插件执行 Schema、业务规则和 renderer plan 校验。
+9. 插件显示输入类型、轮廓闭合状态、segment 数量、feature 数量、标注数量、预览摘要和可复制 issue。
+10. 用户确认应用。
+11. CAD-facing writer 在单个 DocumentLock + Transaction 中创建 CAD 实体和标注。
+12. 插件显示写入结果；后续 P6 再做完整 DWG 几何摘要和批量回归。
+
+该路径不得创建模型客户端、读取 API key 或联网。内部模型 API 是后续增强路径，不是 P5A 默认验收路径。
+
 ## Flow 1: Natural Language Drawing
 
 1. 用户运行 `AIDRAW`。
@@ -15,6 +32,8 @@
 11. 插件提取几何摘要。
 12. 插件复核尺寸、图层、标注和实体数量。
 13. 插件显示结果报告。
+
+该路径保留为高级增强。后续内部模型 API 默认应生成 CadIntent JSON，由本地领域包编译为 DrawingSpec；完整 DrawingSpec 生成只作为高级调试入口。
 
 ### Flow 1a: Clarification Follow-up Loop
 
@@ -35,6 +54,8 @@
 6. CAD-facing writer 创建实体和标注，并在失败或取消时回滚事务。
 7. 插件复核并导出。
 
+P5A 后该流程并入 CadIntent：标准件走 `TemplateIntent`，模板组合件走 `CompositeIntent`，非标准二维机械新建图走 `SketchIntent`。
+
 ## Flow 3: Existing Drawing Edit
 
 1. 用户选择现有实体或区域。
@@ -46,6 +67,8 @@
 7. 插件在事务中修改实体。
 8. 插件复核修改结果。
 9. 插件记录旧值、新值和 request id。
+
+已有 DWG 修改不走 `SketchIntent`。第一阶段只支持非标准件新建绘图；已有图编辑后续单独定义 `EditSpec`、`SelectionGeometrySummary` 和本地高亮预览。
 
 ## Flow 4: Validation And Repair
 

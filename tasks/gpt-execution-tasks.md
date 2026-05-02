@@ -11,6 +11,19 @@
 - 不确定时把问题写入 `docs/open-questions.md`，不要默默假设。
 - 涉及 CAD 写入、文件覆盖、外部服务调用时必须有安全边界。
 
+## Current Development Flow
+
+当前后续开发主线从“插件内部模型直接生成完整 DrawingSpec”调整为“粘贴 JSON 优先、本地编译和校验优先”：
+
+1. P5A-01 定义 `CadIntentSpec v1` 上层输入合同和校验器。
+2. P5A-02 实现 `mechanical_plate` 模板/组合领域包，把高频标准件 intent 本地编译为 DrawingSpec。
+3. P5A-03 实现 `generic_2d_mechanical` 受控草图领域包，支持非标准二维机械新建图。
+4. P5A-04 在插件面板加入“粘贴 JSON / 校验预览”默认路径，保持写入 DWG 前必须预览确认。
+5. P5A-05 输出外部 AI Skill 模板，让 AI 默认生成 CadIntent JSON，而不是完整 DrawingSpec。
+6. P5A-06 建立 intent 样例和性能回归门槛，再进入 P6 几何摘要、批量回归和稳定性验证。
+
+内部模型 API 作为后续增强能力保留，但不再作为 P5A 验收主路径；完整 DrawingSpec 粘贴保留为高级调试入口。
+
 ## Phase P0: Scope And Environment
 
 ### P0-01 Confirm MVP Domain
@@ -71,6 +84,17 @@ Acceptance Criteria:
 - 至少定义图层、颜色、线型、线宽。
 - 至少定义文字样式和标注样式。
 - 明确图框模板路径和块库来源。
+
+### P0 Scope And Environment Closure
+
+Date: 2026-05-02
+
+Status:
+
+- P0-01 已完成：MVP 领域锁定为 `mechanical_plate`，并在 `docs/capability-contract.md` 中列出 12 类样例需求。
+- P0-02 已完成：`docs/environment-matrix.md` 已锁定 ZWCAD 2025 x64 本机基线、ZWCAD 2025 managed assemblies、ZWCAD 2026 后续兼容目标和未验证环境。
+- P0-03 已完成：`docs/cad-standards.md` 已定义 `enterprise-default-v1` 图层、线型、文字、标注、图框路径和块库来源草案。
+- P0 后续非阻塞缺口：尚未收集 20 个真实需求样例；正式企业 DWT/DWG、CTB/STB 和块库文件仍待管理员提供；联网、云端模型和日志保留策略仍需部署侧决策。
 
 ## Phase P1: Technical POC
 
@@ -445,6 +469,18 @@ Acceptance Criteria:
 - 即使开启敏感内容记录，也不能记录 API key。
 - 日志实现不改变 provider 请求边界和 repair loop 边界。
 
+### P4 AI Service Integration Closure
+
+Date: 2026-05-02
+
+Status:
+
+- P4-01 至 P4-06 均已完成并在 `docs/environment-matrix.md` 留有 evidence。
+- 当前 P4 主线包含 prompt 合同、本地 adapter、DrawingSpec-only repair loop、HTTP/私有网关 provider、澄清追问服务闭环和默认脱敏 AI 调用日志。
+- P4 请求边界保持不上传完整 DWG、截图或任意插件上下文；API key 只从配置指定环境变量读取，且日志层强制脱敏。
+- P4 剩余事项不阻塞阶段关闭：云端/私有网关/本地模型的企业部署策略、日志保留周期和访问权限仍作为部署决策保留在 `docs/open-questions.md`。
+- 本阶段不声明 Codex config fallback、DashScope provider、`AISETTINGS` 或模型配置文件启动器已经进入主线；这些属于开发分支代码或后续增强范围。
+
 ## Phase P5: Plugin UI
 
 ### P5-01 Build AI Drawing Panel
@@ -487,6 +523,171 @@ Acceptance Criteria:
 - 可定位 request id。
 - 敏感字段可脱敏。
 
+### P5 Plugin UI Checkpoint
+
+Date: 2026-05-02
+
+Status:
+
+- P5-01 已完成代码层实现：`AIDRAW` 打开 ZWCAD `PaletteSet` Dock 面板，支持自然语言输入、澄清回答、状态/错误显示、参数/预览摘要和确认后写入 DWG。
+- P5-01 已保持 P4 服务边界：初始生成调用 `CreateDrawingSpec`，澄清回答调用 `ContinueDrawingSpecAfterClarification`，UI 不调用 `RepairDrawingSpec`。
+- P5-01 自动化基线已覆盖 UI 状态映射、预览确认门槛和服务错误映射；成功模型服务端到端链路仍需在 ZWCAD 进程内手工验收。
+- P5A 默认主路径尚未实现：粘贴 CadIntent/DrawingSpec JSON 后本地校验预览、再确认写入。
+- P5-02 仍未完成：尚无历史记录存储、历史记录面板或 `AIHISTORY` 命令实现。
+
+## Phase P5A: Production JSON Input And CadIntent
+
+### P5A-01 Define CadIntentSpec v1 Contract
+
+Goal: 定义比 DrawingSpec 更适合用户和外部 AI 输入的上层 JSON 合同，支持模板、组合特征和受控草图三种新建图输入。
+
+Context Files:
+
+- `docs/capability-contract.md`
+- `docs/implementation-flows.md`
+- `specs/drawing-spec-v1.md`
+- `specs/drawing-spec-v1.schema.json`
+
+Deliverables:
+
+- `CadIntentSpec v1` 文档或 schema 草案。
+- intent 输入类型识别规则：`TemplateIntent`、`CompositeIntent`、`SketchIntent`、`DrawingSpec`。
+- 稳定 issue code：`missing_required_parameter`、`unsupported_domain_pack`、`unsupported_template`、`unsupported_feature_type`、`unsupported_segment_type`、`profile_not_closed`、`unsupported_json_contract`。
+- clarify 规则：关键尺寸、位置、半径、角度、闭合关系缺失时返回 clarification，不猜测。
+
+Acceptance Criteria:
+
+- 合法 `TemplateIntent`、`CompositeIntent`、`SketchIntent` 可被识别。
+- 缺少关键尺寸返回稳定 issue，而不是进入 DrawingSpec renderer。
+- 未知领域、模板、feature、segment 返回稳定 issue。
+- 直接粘贴 DrawingSpec 仍可被识别为高级入口。
+- 合同明确第一阶段不支持任意 DWG 自动理解、建筑、电气、管线、3D 或钣金展开。
+
+### P5A-02 Implement Mechanical Plate Domain Pack
+
+Goal: 让高频机械板件输入不调用模型，直接通过本地领域包编译为 DrawingSpec。
+
+Context Files:
+
+- `docs/capability-contract.md`
+- `docs/cad-standards.md`
+- `examples/rectangular-plate.example.json`
+- `src/ZwcadAi.Core/RectangularPlateSample.cs`
+
+Deliverables:
+
+- `mechanical_plate` 领域包接口实现。
+- `TemplateIntent` 编译器：至少支持 `rectangular_plate`。
+- `CompositeIntent` 编译器：支持 rectangle base profile、hole、slot、fillet、基础 overall/feature dimensions 和 center marks。
+- 自动补齐标准图层、稳定 id、常规尺寸文本和默认标注偏移。
+
+Acceptance Criteria:
+
+- `1200x300 rectangular_plate` 从 intent 编译为合法 DrawingSpec，且不创建模型客户端、不读取 API key、不联网。
+- 组合孔、槽、圆角生成的 DrawingSpec 通过 schema、业务规则和 renderer plan 校验。
+- 重复输入生成一致 DrawingSpec，稳定 id 不依赖时间戳或随机数。
+- 简单模板路径目标预览耗时小于 2 秒。
+
+### P5A-03 Implement Generic 2D Mechanical Sketch Pack
+
+Goal: 支持非标准二维机械新建图，不要求套固定模板，但仍限制在受控草图 JSON 内。
+
+Context Files:
+
+- `specs/drawing-spec-v1.md`
+- `docs/cad-standards.md`
+- `src/ZwcadAi.Renderer/DrawingRenderPlan.cs`
+
+Deliverables:
+
+- `generic_2d_mechanical` 领域包接口实现。
+- `SketchIntent` 编译器：支持 line、arc、circle/hole、slot、profile、text/mtext、linear/aligned/radius/diameter/angular dimension intent。
+- profile 闭合、segment 连续性、feature target、dimension target 校验。
+- 非标准件预览摘要字段：轮廓是否闭合、segment 数量、feature 数量、标注数量、未解析问题。
+
+Acceptance Criteria:
+
+- line/arc 混合闭合 profile 可编译为 DrawingSpec 并通过 renderer plan。
+- 未闭合 profile 返回 `profile_not_closed`。
+- 未知 segment/feature/dimension 类型返回 `unsupported_*`。
+- SketchIntent 到预览目标耗时小于 5 秒，前提是实体数量低于 MVP 限制。
+- 第一阶段不读取或上传完整 DWG；已有 DWG 修改需求明确转入后续 EditSpec 任务。
+
+### P5A-04 Add Pasted JSON Preview Path To Plugin UI
+
+Goal: 把“粘贴 JSON / 校验预览”作为默认用户路径，绕开内部模型等待和 token 成本。
+
+Context Files:
+
+- `src/ZwcadAiPlugin/AiDrawingPanelControl.cs`
+- `src/ZwcadAiPlugin/AiDrawingPluginServices.cs`
+- `src/ZwcadAi.Ui/AiDrawingPanelState.cs`
+- `docs/implementation-flows.md`
+
+Deliverables:
+
+- 面板输入模式：`意图 JSON`、`DrawingSpec JSON`、`模型生成`。
+- “校验预览”按钮，直接走本地 intent/DrawingSpec 解析、校验、renderer plan 和预览摘要。
+- 输入类型显示：`TemplateIntent`、`CompositeIntent`、`SketchIntent`、`DrawingSpec`。
+- 校验失败显示可复制 `code/path/message`。
+
+Acceptance Criteria:
+
+- 粘贴 intent 后可预览，预览成功后才允许确认写入。
+- 粘贴 JSON 路径不创建模型客户端、不读取 API key、不联网。
+- 粘贴 DrawingSpec 仍走现有 schema/business/renderer 校验。
+- 预览计划与确认写入计划保持一致。
+- 内部模型路径保留但标记为高级增强，不阻塞 P5A 验收。
+
+### P5A-05 Create External AI Skill Templates
+
+Goal: 为外部 AI 软件提供标准 skill 模板，让 AI 默认输出 CadIntent JSON，而不是完整 DrawingSpec。
+
+Context Files:
+
+- `prompts/gpt-system-prompt.md`
+- `prompts/model-prompt-contract-v1.md`
+- `specs/drawing-spec-v1.md`
+- `docs/capability-contract.md`
+
+Deliverables:
+
+- `zwcad-mechanical-plate-intent` skill 模板。
+- `zwcad-generic-2d-mechanical-intent` skill 模板。
+- 3 类输出示例：`TemplateIntent`、`CompositeIntent`、`SketchIntent`。
+- 修错提示模板：把插件返回的 `code/path/message` 贴回 AI 后，只修 intent JSON。
+
+Acceptance Criteria:
+
+- Skill 明确只输出 JSON，不输出 Markdown、CAD 命令、脚本或插件操作。
+- 标准件输出 `TemplateIntent`，模板组合输出 `CompositeIntent`，非标准二维机械轮廓输出 `SketchIntent`。
+- 缺少关键工程参数时输出 `clarifications`。
+- 只有用户明确要求高级调试时才输出完整 DrawingSpec。
+
+### P5A-06 Build CadIntent Regression And Performance Gate
+
+Goal: 在进入 P6 前建立 intent 层回归，防止本地编译器和 UI 预览路径退化。
+
+Context Files:
+
+- `examples/`
+- `src/ZwcadAi.Tests/Program.cs`
+- `checklists/execution-checklist.md`
+
+Deliverables:
+
+- 不少于 10 个 `mechanical_plate` intent 样例。
+- 不少于 5 个 `generic_2d_mechanical` sketch intent 样例。
+- 每个样例编译后的 DrawingSpec 进入现有 schema/business/renderer plan 回归。
+- 简单模板、组合模板、非标准 sketch 的耗时记录。
+
+Acceptance Criteria:
+
+- 所有 intent 样例可批量编译和校验。
+- 简单矩形路径模型调用次数为 0。
+- `TemplateIntent` 预览小于 2 秒，`CompositeIntent` 预览小于 3 秒，`SketchIntent` 预览小于 5 秒。
+- 失败报告包含样例名、输入类型、issue code 和 path。
+
 ## Phase P6: Verification And Regression
 
 ### P6-01 Build Geometry Summary
@@ -515,18 +716,21 @@ Goal: 建立样例回归测试，防止渲染逻辑退化。
 Context Files:
 
 - `examples/rectangular-plate.example.json`
+- `examples/`
 
 Deliverables:
 
 - 至少 10 个 DrawingSpec 样例。
+- 至少 10 个 CadIntent 样例。
 - 期望几何摘要。
 - 回归运行说明。
 
 Acceptance Criteria:
 
 - 所有样例可批量渲染。
+- 所有 CadIntent 样例可先批量编译为 DrawingSpec。
 - 几何摘要可批量比对。
-- 失败报告包含样例名和实体 id。
+- 失败报告包含样例名、输入类型、issue code、path 和实体 id。
 
 ### P6-03 Stability Test
 
@@ -545,7 +749,7 @@ Deliverables:
 Acceptance Criteria:
 
 - 连续生成 100 张样例图不崩溃。
-- 非法 JSON、网络失败、导出失败都有清晰错误。
+- 非法 JSON、缺参 intent、未闭合 sketch、网络失败、导出失败都有清晰错误。
 - 单张标准图渲染耗时满足目标。
 
 ## Phase P7: Packaging And Deployment
