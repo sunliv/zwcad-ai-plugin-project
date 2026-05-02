@@ -26,6 +26,12 @@ public static class Program
             ("CadIntent classifier recognizes CompositeIntent", CadIntentClassifierRecognizesCompositeIntent),
             ("CadIntent classifier recognizes SketchIntent", CadIntentClassifierRecognizesSketchIntent),
             ("CadIntent classifier recognizes DrawingSpec advanced input", CadIntentClassifierRecognizesDrawingSpecAdvancedInput),
+            ("CadIntent compiler compiles rectangular plate template locally", CadIntentCompilerCompilesRectangularPlateTemplateLocally),
+            ("CadIntent compiler compiles mechanical plate composite features", CadIntentCompilerCompilesMechanicalPlateCompositeFeatures),
+            ("CadIntent compiler produces deterministic output for repeated input", CadIntentCompilerProducesDeterministicOutputForRepeatedInput),
+            ("CadIntent compiler rejects degenerate slot dimensions", CadIntentCompilerRejectsDegenerateSlotDimensions),
+            ("CadIntent compiler rejects oversized fillet radius", CadIntentCompilerRejectsOversizedFilletRadius),
+            ("CadIntent compiler uses only local deterministic dependencies", CadIntentCompilerUsesOnlyLocalDeterministicDependencies),
             ("CadIntent validator returns stable missing parameter issues", CadIntentValidatorReturnsStableMissingParameterIssues),
             ("CadIntent validator returns stable unsupported domain issue", CadIntentValidatorReturnsStableUnsupportedDomainIssue),
             ("CadIntent validator returns stable unsupported template issue", CadIntentValidatorReturnsStableUnsupportedTemplateIssue),
@@ -161,6 +167,221 @@ public static class Program
 
         AssertEqual(CadJsonInputKind.DrawingSpec, result.Kind);
         Assert(result.Validation.IsValid, FormatIssues(result.Validation.Issues));
+    }
+
+    private static void CadIntentCompilerCompilesRectangularPlateTemplateLocally()
+    {
+        var result = CadIntentCompiler.Compile("""
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "TemplateIntent",
+          "domainPack": "mechanical_plate",
+          "units": "mm",
+          "template": "rectangular_plate",
+          "parameters": {
+            "length": 120,
+            "width": 80
+          }
+        }
+        """);
+
+        Assert(result.Success, $"TemplateIntent should compile: {FormatIssues(result.Validation.Issues)}");
+
+        var spec = result.DrawingSpec!;
+        AssertCompiledSpecPassesValidationAndPlanning(spec);
+        AssertEqual(DrawingSpecWireFormat.Version, spec.DrawingSpecVersion);
+        AssertEqual("mm", spec.Units);
+        AssertEqual(DrawingDomain.MechanicalPlate, spec.Metadata.Domain);
+        AssertEqual("cadintent-rectangular-plate-120x80", spec.Metadata.RequestId);
+        AssertSequenceEqual(
+            new[] { CadLayerNames.Outline, CadLayerNames.Center, CadLayerNames.Dimension },
+            spec.Layers.Select(layer => layer.Name).ToArray());
+
+        var outline = spec.Entities.Single(entity => entity.Id == "outer-profile");
+        AssertEqual(EntityTypes.Polyline, outline.Type);
+        AssertEqual(CadLayerNames.Outline, outline.Layer);
+        Assert(outline.Closed, "Rectangular plate outline must be a closed polyline.");
+        AssertPoint(0, 0, outline.Points[0]);
+        AssertPoint(120, 0, outline.Points[1]);
+        AssertPoint(120, 80, outline.Points[2]);
+        AssertPoint(0, 80, outline.Points[3]);
+
+        var length = spec.Dimensions.Single(dimension => dimension.Id == "dim-overall-length");
+        AssertEqual(DimensionTypes.Linear, length.Type);
+        AssertPoint(0, 0, length.From);
+        AssertPoint(120, 0, length.To);
+        AssertPoint(0, -12, length.Offset);
+        AssertEqual("120", length.Text);
+
+        var width = spec.Dimensions.Single(dimension => dimension.Id == "dim-overall-width");
+        AssertEqual(DimensionTypes.Linear, width.Type);
+        AssertPoint(120, 0, width.From);
+        AssertPoint(120, 80, width.To);
+        AssertPoint(12, 0, width.Offset);
+        AssertEqual("80", width.Text);
+    }
+
+    private static void CadIntentCompilerCompilesMechanicalPlateCompositeFeatures()
+    {
+        var result = CadIntentCompiler.Compile("""
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "CompositeIntent",
+          "domainPack": "mechanical_plate",
+          "units": "mm",
+          "baseProfile": {
+            "type": "rectangle",
+            "size": {
+              "length": 160,
+              "width": 90
+            }
+          },
+          "features": [
+            {
+              "type": "hole",
+              "center": [40, 45],
+              "diameter": 20
+            },
+            {
+              "type": "slot",
+              "center": [105, 45],
+              "length": 50,
+              "width": 16,
+              "angle": 0
+            },
+            {
+              "type": "fillet",
+              "radius": 8
+            },
+            {
+              "type": "centerMark",
+              "center": [80, 45]
+            }
+          ]
+        }
+        """);
+
+        Assert(result.Success, $"CompositeIntent should compile: {FormatIssues(result.Validation.Issues)}");
+
+        var spec = result.DrawingSpec!;
+        AssertCompiledSpecPassesValidationAndPlanning(spec);
+
+        Assert(!spec.Entities.Any(entity => entity.Id == "outer-profile" && entity.Type == EntityTypes.Polyline), "Filleted plates must not keep a full sharp-corner rectangle profile.");
+        AssertEqual(4, spec.Entities.Count(entity => entity.Id.StartsWith("outer-profile-line-", StringComparison.Ordinal)));
+        var bottomEdge = spec.Entities.Single(entity => entity.Id == "outer-profile-line-bottom");
+        AssertPoint(8, 0, bottomEdge.Start);
+        AssertPoint(152, 0, bottomEdge.End);
+        Assert(spec.Entities.Any(entity => entity.Id == "hole-1" && entity.Type == EntityTypes.Circle), "Hole feature must compile to a circle.");
+        Assert(spec.Entities.Any(entity => entity.Id == "hole-1-center" && entity.Type == EntityTypes.CenterMark), "Hole feature must include a center mark.");
+        Assert(spec.Entities.Any(entity => entity.Id == "slot-1-center" && entity.Type == EntityTypes.CenterMark), "Slot feature must include a center mark.");
+        Assert(spec.Entities.Any(entity => entity.Id == "center-mark-1" && entity.Type == EntityTypes.CenterMark), "Explicit centerMark feature must compile.");
+        AssertEqual(2, spec.Entities.Count(entity => entity.Id.StartsWith("slot-1-line-", StringComparison.Ordinal)));
+        AssertEqual(2, spec.Entities.Count(entity => entity.Id.StartsWith("slot-1-arc-", StringComparison.Ordinal)));
+        AssertEqual(4, spec.Entities.Count(entity => entity.Id.StartsWith("fillet-1-", StringComparison.Ordinal)));
+
+        Assert(spec.Dimensions.Any(dimension => dimension.Id == "dim-overall-length" && dimension.Text == "160"), "Overall length dimension is required.");
+        Assert(spec.Dimensions.Any(dimension => dimension.Id == "dim-overall-width" && dimension.Text == "90"), "Overall width dimension is required.");
+        Assert(spec.Dimensions.Any(dimension => dimension.Id == "dim-hole-1-diameter" && dimension.TargetEntityId == "hole-1" && dimension.Text == "%%c20"), "Hole diameter dimension is required.");
+        Assert(spec.Dimensions.Any(dimension => dimension.Id == "dim-slot-1-length" && dimension.Text == "50"), "Slot length dimension is required.");
+        Assert(spec.Dimensions.Any(dimension => dimension.Id == "dim-slot-1-width" && dimension.Text == "16"), "Slot width dimension is required.");
+        Assert(spec.Dimensions.Any(dimension => dimension.Id == "dim-fillet-1-radius" && dimension.TargetEntityId == "fillet-1-top-right" && dimension.Text == "R8"), "Fillet radius dimension is required.");
+
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(spec);
+        AssertEqual(1, plan.Entities.Count(entity => entity.SpecEntityId == "hole-1" && entity.Kind == PlannedEntityKind.Circle));
+        AssertEqual(6, plan.Entities.Count(entity => entity.Kind == PlannedEntityKind.CenterLine));
+        AssertEqual(6, plan.Dimensions.Count);
+    }
+
+    private static void CadIntentCompilerProducesDeterministicOutputForRepeatedInput()
+    {
+        var first = CadIntentCompiler.Compile(ValidCompositeIntentJson());
+        var second = CadIntentCompiler.Compile(ValidCompositeIntentJson());
+
+        Assert(first.Success, $"First compile should succeed: {FormatIssues(first.Validation.Issues)}");
+        Assert(second.Success, $"Second compile should succeed: {FormatIssues(second.Validation.Issues)}");
+        AssertEqual(FingerprintSpec(first.DrawingSpec!), FingerprintSpec(second.DrawingSpec!));
+
+        var ids = first.DrawingSpec!.Entities.Select(entity => entity.Id)
+            .Concat(first.DrawingSpec.Dimensions.Select(dimension => dimension.Id))
+            .Concat(new[] { first.DrawingSpec.Metadata.RequestId })
+            .ToArray();
+
+        Assert(ids.All(IsStableAsciiId), $"All compiled ids must be stable ASCII ids. Got: {string.Join(", ", ids)}");
+    }
+
+    private static void CadIntentCompilerRejectsDegenerateSlotDimensions()
+    {
+        var result = CadIntentCompiler.Compile("""
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "CompositeIntent",
+          "domainPack": "mechanical_plate",
+          "units": "mm",
+          "baseProfile": {
+            "type": "rectangle",
+            "size": {
+              "length": 100,
+              "width": 60
+            }
+          },
+          "features": [
+            {
+              "type": "slot",
+              "center": [50, 30],
+              "length": 16,
+              "width": 16,
+              "angle": 0
+            }
+          ]
+        }
+        """);
+
+        Assert(!result.Success, "Slot length equal to width must not compile to degenerate lines.");
+        Assert(result.DrawingSpec == null, "Invalid slot parameters must not produce a DrawingSpec.");
+        AssertIssue(result.Validation, CadIntentIssueCodes.MissingRequiredParameter, "$.features[0].length");
+    }
+
+    private static void CadIntentCompilerRejectsOversizedFilletRadius()
+    {
+        var result = CadIntentCompiler.Compile("""
+        {
+          "cadIntentSpecVersion": "1.0",
+          "intentType": "CompositeIntent",
+          "domainPack": "mechanical_plate",
+          "units": "mm",
+          "baseProfile": {
+            "type": "rectangle",
+            "size": {
+              "length": 100,
+              "width": 60
+            }
+          },
+          "features": [
+            {
+              "type": "fillet",
+              "radius": 30
+            }
+          ]
+        }
+        """);
+
+        Assert(!result.Success, "Fillet radius at half the shortest side would collapse straight outline edges.");
+        Assert(result.DrawingSpec == null, "Invalid fillet parameters must not produce a DrawingSpec.");
+        AssertIssue(result.Validation, CadIntentIssueCodes.MissingRequiredParameter, "$.features[0].radius");
+    }
+
+    private static void CadIntentCompilerUsesOnlyLocalDeterministicDependencies()
+    {
+        var root = FindRepositoryRoot();
+        var sourcePath = Path.Combine(root, "src", "ZwcadAi.Core", "CadIntentCompiler.cs");
+        var source = File.ReadAllText(sourcePath);
+
+        foreach (var forbiddenToken in new[] { "Guid", "DateTime", "Random", "HttpClient", "Environment.GetEnvironmentVariable", "api_key", "ApiKey", "ZwManaged", "ZwDatabaseMgd" })
+        {
+            Assert(
+                source.IndexOf(forbiddenToken, StringComparison.OrdinalIgnoreCase) < 0,
+                $"CadIntent compiler must stay local and deterministic; forbidden token '{forbiddenToken}' was found.");
+        }
     }
 
     private static void CadIntentValidatorReturnsStableMissingParameterIssues()
@@ -3606,6 +3827,82 @@ public static class Program
           ]
         }
         """;
+    }
+
+    private static void AssertCompiledSpecPassesValidationAndPlanning(DrawingSpec spec)
+    {
+        var schema = DrawingSpecValidator.ValidateSchema(spec);
+        Assert(schema.IsValid, $"Compiled DrawingSpec must pass schema validation: {FormatIssues(schema.Issues)}");
+
+        var business = DrawingSpecValidator.ValidateBusinessRules(spec);
+        Assert(business.IsValid, $"Compiled DrawingSpec must pass business validation: {FormatIssues(business.Issues)}");
+
+        var plan = new DrawingSpecPlanRenderer().CreatePlan(spec);
+        Assert(plan.Validation.IsValid, $"Compiled DrawingSpec must produce a valid render plan: {FormatIssues(plan.Validation.Issues)}");
+    }
+
+    private static string FingerprintSpec(DrawingSpec spec)
+    {
+        var parts = new List<string>
+        {
+            spec.DrawingSpecVersion,
+            spec.Units,
+            spec.Metadata.Title,
+            spec.Metadata.Domain,
+            spec.Metadata.Author,
+            spec.Metadata.CreatedBy,
+            spec.Metadata.RequestId
+        };
+
+        parts.AddRange(spec.Layers.Select(layer =>
+            $"L:{layer.Name}:{layer.Color}:{layer.LineType}:{FormatDouble(layer.LineWeight)}"));
+        parts.AddRange(spec.Entities.Select(entity =>
+            $"E:{entity.Id}:{entity.Type}:{entity.Layer}:{entity.Closed}:{FormatPoints(entity.Points)}:{FormatPoint(entity.Start)}:{FormatPoint(entity.End)}:{FormatPoint(entity.Center)}:{FormatPoint(entity.Position)}:{FormatDouble(entity.Radius)}:{FormatDouble(entity.Size)}:{FormatDouble(entity.StartAngle)}:{FormatDouble(entity.EndAngle)}:{entity.Value}:{FormatDouble(entity.Height)}:{FormatDouble(entity.Rotation)}"));
+        parts.AddRange(spec.Dimensions.Select(dimension =>
+            $"D:{dimension.Id}:{dimension.Type}:{dimension.Layer}:{FormatPoint(dimension.From)}:{FormatPoint(dimension.To)}:{FormatPoint(dimension.Center)}:{dimension.TargetEntityId}:{FormatPoint(dimension.Offset)}:{dimension.Text}"));
+        parts.AddRange(spec.Clarifications.Select(clarification => $"C:{clarification}"));
+
+        return string.Join("|", parts);
+    }
+
+    private static string FormatPoints(IEnumerable<DrawingPoint> points)
+    {
+        return string.Join(";", points.Select(point => FormatPoint(point)));
+    }
+
+    private static string FormatPoint(DrawingPoint? point)
+    {
+        return point == null ? string.Empty : $"{FormatDouble(point.X)},{FormatDouble(point.Y)}";
+    }
+
+    private static string FormatDouble(double value)
+    {
+        return value.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static bool IsStableAsciiId(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        foreach (var c in value)
+        {
+            if ((c >= 'a' && c <= 'z')
+                || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9')
+                || c == '-'
+                || c == '_'
+                || c == '.')
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
     }
 
     private static string FormatIssues(IEnumerable<ValidationIssue> issues)
